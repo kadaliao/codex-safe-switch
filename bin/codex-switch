@@ -1,0 +1,192 @@
+#!/usr/bin/env bash
+# codex-switch — switch between Codex provider profiles
+#
+# Storage layout:
+#   ~/.codex/profiles/
+#     ├── bin/{codex-switch,_swap.py}
+#     ├── .active                  # name of the currently-loaded profile
+#     └── <name>/
+#           ├── auth.json          # full file copied to ~/.codex/auth.json
+#           └── provider.toml      # provider-only slice merged into ~/.codex/config.toml
+
+set -euo pipefail
+
+PROFILE_ROOT="${CODEX_PROFILE_ROOT:-$HOME/.codex/profiles}"
+CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
+ACTIVE_FILE="$PROFILE_ROOT/.active"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SWAP_PY="$SCRIPT_DIR/_swap.py"
+UV_BIN="${UV_BIN:-$(command -v uv || echo /opt/homebrew/bin/uv)}"
+
+err() { printf 'codex-switch: %s\n' "$*" >&2; }
+die() { err "$*"; exit 1; }
+
+run_py() {
+  "$UV_BIN" run --quiet --with tomlkit python "$SWAP_PY" "$@"
+}
+
+usage() {
+  cat <<'EOF'
+codex-switch — manage Codex provider profiles
+
+  ls                     list profiles (★ = active)
+  current                print the active profile name
+  use <name>             load <name> into ~/.codex/{config.toml,auth.json}
+  save <name>            snapshot the current ~/.codex state into <name>
+  show <name>            print <name>'s provider.toml
+  rm <name>              delete profile <name> (cannot remove the active one)
+  alfred-list            machine-readable list for Alfred Script Filter
+EOF
+}
+
+active_name() {
+  [[ -f "$ACTIVE_FILE" ]] && cat "$ACTIVE_FILE" || true
+}
+
+list_profiles() {
+  find "$PROFILE_ROOT" -mindepth 1 -maxdepth 1 -type d ! -name bin \
+    -exec basename {} \; | sort
+}
+
+cmd_ls() {
+  local active; active="$(active_name)"
+  while IFS= read -r name; do
+    [[ -z "$name" ]] && continue
+    if [[ "$name" == "$active" ]]; then
+      printf '★ %s\n' "$name"
+    else
+      printf '  %s\n' "$name"
+    fi
+  done < <(list_profiles)
+}
+
+cmd_current() {
+  local active; active="$(active_name)"
+  if [[ -n "$active" ]]; then
+    echo "$active"
+  else
+    echo "(none)"
+    return 1
+  fi
+}
+
+cmd_use() {
+  local name="${1:-}"
+  [[ -n "$name" ]] || die "use: profile name required"
+  local dir="$PROFILE_ROOT/$name"
+  [[ -d "$dir" ]] || die "profile not found: $name"
+  [[ -f "$dir/auth.json" ]] || die "missing $dir/auth.json"
+  [[ -f "$dir/provider.toml" ]] || die "missing $dir/provider.toml"
+
+  # write to tempfiles first, then atomically rename — never leave a half-written config
+  local tmp_cfg; tmp_cfg="$(mktemp "$CODEX_DIR/config.toml.XXXXXX")"
+  local tmp_auth; tmp_auth="$(mktemp "$CODEX_DIR/auth.json.XXXXXX")"
+  trap 'rm -f "$tmp_cfg" "$tmp_auth"' EXIT
+
+  # If config.toml doesn't exist yet, start from an empty file.
+  local cur_cfg="$CODEX_DIR/config.toml"
+  [[ -f "$cur_cfg" ]] || : > "$cur_cfg"
+
+  run_py merge "$cur_cfg" "$dir/provider.toml" "$tmp_cfg"
+  cp -p "$dir/auth.json" "$tmp_auth"
+
+  # match the mode of the file we're replacing (fall back to 600 for first run)
+  copy_mode() {
+    local src="$1" dst="$2"
+    if [[ -f "$src" ]]; then
+      chmod "$(stat -f '%Lp' "$src")" "$dst"
+    else
+      chmod 600 "$dst"
+    fi
+  }
+  copy_mode "$cur_cfg" "$tmp_cfg"
+  copy_mode "$CODEX_DIR/auth.json" "$tmp_auth"
+
+  mv "$tmp_cfg" "$cur_cfg"
+  mv "$tmp_auth" "$CODEX_DIR/auth.json"
+  trap - EXIT
+
+  printf '%s\n' "$name" > "$ACTIVE_FILE"
+  echo "switched → $name"
+}
+
+cmd_save() {
+  local name="${1:-}"
+  [[ -n "$name" ]] || die "save: profile name required"
+  case "$name" in bin|.active) die "reserved name: $name" ;; esac
+  local dir="$PROFILE_ROOT/$name"
+  mkdir -p "$dir"
+  [[ -f "$CODEX_DIR/auth.json" ]] || die "no ~/.codex/auth.json to snapshot"
+  cp -p "$CODEX_DIR/auth.json" "$dir/auth.json"
+  if [[ -f "$CODEX_DIR/config.toml" ]]; then
+    run_py extract "$CODEX_DIR/config.toml" "$dir/provider.toml"
+  else
+    : > "$dir/provider.toml"
+  fi
+  echo "saved → $name"
+}
+
+cmd_show() {
+  local name="${1:-}"
+  [[ -n "$name" ]] || die "show: profile name required"
+  local dir="$PROFILE_ROOT/$name"
+  [[ -d "$dir" ]] || die "profile not found: $name"
+  echo "# $dir/provider.toml"
+  cat "$dir/provider.toml" 2>/dev/null || echo "(empty)"
+  echo
+  echo "# $dir/auth.json (keys only)"
+  if command -v python3 >/dev/null; then
+    python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print("\n".join(sorted(d.keys())))' "$dir/auth.json"
+  else
+    grep -oE '"[^"]+":' "$dir/auth.json" | tr -d '":' | sort -u
+  fi
+}
+
+cmd_rm() {
+  local name="${1:-}"
+  [[ -n "$name" ]] || die "rm: profile name required"
+  local dir="$PROFILE_ROOT/$name"
+  [[ -d "$dir" ]] || die "profile not found: $name"
+  [[ "$name" == "$(active_name)" ]] && die "cannot remove the active profile: $name"
+  rm -rf "$dir"
+  echo "removed → $name"
+}
+
+cmd_alfred_list() {
+  # Emit Alfred Script Filter JSON: items with title, arg, subtitle.
+  local active; active="$(active_name)"
+  local first=1
+  printf '{"items":['
+  while IFS= read -r name; do
+    [[ -z "$name" ]] && continue
+    local title="$name" subtitle=""
+    if [[ "$name" == "$active" ]]; then
+      title="★ $name"
+      subtitle="current profile — pressing return reloads it"
+    else
+      subtitle="switch to $name"
+    fi
+    [[ $first -eq 0 ]] && printf ','
+    first=0
+    printf '{"uid":"%s","title":"%s","arg":"%s","subtitle":"%s","autocomplete":"%s"}' \
+      "$name" "$title" "$name" "$subtitle" "$name"
+  done < <(list_profiles)
+  printf ']}'
+}
+
+main() {
+  local cmd="${1:-}"; shift || true
+  case "$cmd" in
+    ls|list) cmd_ls ;;
+    current) cmd_current ;;
+    use|switch) cmd_use "$@" ;;
+    save) cmd_save "$@" ;;
+    show) cmd_show "$@" ;;
+    rm|remove) cmd_rm "$@" ;;
+    alfred-list) cmd_alfred_list ;;
+    ""|-h|--help|help) usage ;;
+    *) usage; exit 2 ;;
+  esac
+}
+
+main "$@"

@@ -1,0 +1,11 @@
+model = "gpt-5-codex"
+model_provider = "myrelay"
+model_reasoning_effort = "high"
+disable_response_storage = true
+preferred_auth_method = "apikey"
+
+[model_providers.myrelay]
+name = "myrelay"
+base_url = "https://your-relay.example.com/openai"
+wire_api = "responses"
+requires_openai_auth = true

@@ -1,0 +1,6 @@
+# macOS
+.DS_Store
+
+# Never commit real credentials
+auth.json
+!examples/**/auth.json
