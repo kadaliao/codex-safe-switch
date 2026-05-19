@@ -6,20 +6,29 @@ Each profile owns the *provider* slice of `~/.codex/config.toml` (model, `[model
 
 ## Install
 
+Requires [`uv`](https://github.com/astral-sh/uv).
+
 ```bash
-git clone https://github.com/kadaliao/codex-profile-switcher.git ~/.codex/profiles-src
-mkdir -p ~/.codex/profiles/bin
-cp ~/.codex/profiles-src/bin/* ~/.codex/profiles/bin/
-chmod +x ~/.codex/profiles/bin/codex-switch
-# optional: put it on $PATH
-ln -sf ~/.codex/profiles/bin/codex-switch /usr/local/bin/codex-switch
+uv tool install git+https://github.com/kadaliao/codex-profile-switcher.git
 ```
 
-Requires [`uv`](https://github.com/astral-sh/uv) on `$PATH` — it loads `tomlkit` on demand for TOML round-tripping.
+This puts `codex-switch` on `$PATH` (default `~/.local/bin/`). Run `uv tool update-shell` once if your shell can't find it.
+
+Upgrade later with `uv tool upgrade codex-profile-switcher`; uninstall with `uv tool uninstall codex-profile-switcher`.
+
+### No-install (one-off)
+
+```bash
+uvx --from git+https://github.com/kadaliao/codex-profile-switcher.git codex-switch ls
+```
+
+`uvx` resolves and caches an ephemeral environment per invocation. Convenient for trying it out, slower for hot paths like Alfred — use `uv tool install` if you want the workflow to feel snappy.
 
 ### Alfred (optional)
 
-Double-click `alfred/codex-profile-switcher.alfredworkflow` to install. Trigger with keyword `cx`.
+After `uv tool install`, double-click `alfred/codex-profile-switcher.alfredworkflow`. Trigger with keyword `cx`.
+
+The workflow calls `$HOME/.local/bin/codex-switch`; if `uv tool install` put the binary elsewhere (`uv tool dir --bin` to check), edit the two `script` blocks in the workflow's plist accordingly.
 
 ## CLI
 
@@ -38,7 +47,6 @@ codex-switch alfred-list   # JSON for Alfred Script Filter
 ```text
 ~/.codex/profiles/
 ├── .active                       # plaintext: name of the active profile
-├── bin/{codex-switch,_swap.py}
 ├── chatgpt-official/
 │   ├── auth.json                 # full file copied into ~/.codex/auth.json
 │   └── provider.toml             # empty = use ChatGPT login
@@ -67,7 +75,6 @@ Or build the files by hand — see `examples/relay-profile/`.
 | -------------------- | -------------------- | --------------------------------- |
 | `CODEX_PROFILE_ROOT` | `~/.codex/profiles`  | where profiles live               |
 | `CODEX_HOME`         | `~/.codex`           | the codex config dir to write     |
-| `UV_BIN`             | `which uv`           | path to the `uv` binary           |
 
 ## License
 
