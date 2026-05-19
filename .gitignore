@@ -12,6 +12,7 @@ dist/
 
 # uv
 .uv/
+uv.lock
 
 # Never commit real credentials at top level (allow placeholder examples)
 auth.json
