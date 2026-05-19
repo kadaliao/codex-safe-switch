@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import _swap
+from .picker import pick
 
 
 def profile_root() -> Path:
@@ -102,6 +103,15 @@ def cmd_current(_args) -> int:
 
 def cmd_use(args) -> int:
     name = args.name
+    if not name:
+        profiles = list_profiles()
+        if not profiles:
+            _die("no profiles to choose from")
+        chosen = pick(profiles, active=active_name(), prompt="Switch to which profile?")
+        if chosen is None:
+            print("cancelled")
+            return 1
+        name = chosen
     dir_ = profile_root() / name
     if not dir_.is_dir():
         _die(f"profile not found: {name}")
@@ -224,12 +234,25 @@ def cmd_alfred_list(_args) -> int:
     return 0
 
 
+def cmd_pick(_args) -> int:
+    """Default action when no subcommand is given: interactive switch."""
+    profiles = list_profiles()
+    if not profiles:
+        _die("no profiles yet — create one with `codex-switch save <name>`")
+    chosen = pick(profiles, active=active_name(), prompt="Switch to which profile?")
+    if chosen is None:
+        print("cancelled")
+        return 1
+    args_ns = argparse.Namespace(name=chosen)
+    return cmd_use(args_ns)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="codex-switch",
-        description="Switch between Codex provider profiles.",
+        description="Switch between Codex provider profiles. Run with no subcommand for an interactive picker.",
     )
-    subs = p.add_subparsers(dest="cmd", required=True, metavar="<command>")
+    subs = p.add_subparsers(dest="cmd", metavar="<command>")
 
     s = subs.add_parser("ls", aliases=["list"], help="list profiles (★ = active)")
     s.set_defaults(func=cmd_ls)
@@ -237,8 +260,8 @@ def build_parser() -> argparse.ArgumentParser:
     s = subs.add_parser("current", help="print the active profile name")
     s.set_defaults(func=cmd_current)
 
-    s = subs.add_parser("use", aliases=["switch"], help="load <name> into ~/.codex/")
-    s.add_argument("name")
+    s = subs.add_parser("use", aliases=["switch"], help="load <name> (interactive if omitted)")
+    s.add_argument("name", nargs="?")
     s.set_defaults(func=cmd_use)
 
     s = subs.add_parser("save", help="snapshot the current ~/.codex state as <name>")
@@ -261,6 +284,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.cmd is None:
+        return cmd_pick(args)
     return args.func(args)
 
 

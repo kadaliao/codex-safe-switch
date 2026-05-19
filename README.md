@@ -33,14 +33,17 @@ The workflow calls `$HOME/.local/bin/codex-switch`; if `uv tool install` put the
 ## CLI
 
 ```text
-codex-switch ls            # list profiles, ★ marks the active one
-codex-switch current       # print the active profile
-codex-switch use <name>    # load <name> into ~/.codex/{config.toml,auth.json}
-codex-switch save <name>   # snapshot the current ~/.codex state as <name>
-codex-switch show <name>   # print <name>'s provider.toml + auth.json key names
-codex-switch rm <name>     # delete profile (the active one is protected)
-codex-switch alfred-list   # JSON for Alfred Script Filter
+codex-switch              # interactive picker (↑/↓, enter to switch, q to cancel)
+codex-switch ls           # list profiles, ★ marks the active one
+codex-switch current      # print the active profile
+codex-switch use [name]   # load <name>; omit for the picker
+codex-switch save <name>  # snapshot the current ~/.codex state as <name>
+codex-switch show <name>  # print <name>'s provider.toml + auth.json key names
+codex-switch rm <name>    # delete profile (the active one is protected)
+codex-switch alfred-list  # JSON for Alfred Script Filter
 ```
+
+The picker auto-falls back to a numeric menu when stdin/stdout aren't TTYs (pipes, scripts).
 
 ## Profile format
 
