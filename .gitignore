@@ -1,6 +1,18 @@
 # macOS
 .DS_Store
 
-# Never commit real credentials
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+build/
+dist/
+.venv/
+
+# uv
+.uv/
+
+# Never commit real credentials at top level (allow placeholder examples)
 auth.json
 !examples/**/auth.json

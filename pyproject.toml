@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "codex-profile-switcher"
+version = "0.1.0"
+description = "Switch between OpenAI Codex CLI provider configurations (official ChatGPT login, third-party relays, multiple API keys). CLI + Alfred workflow."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "kadaliao" }]
+keywords = ["codex", "openai", "cli", "alfred", "profile"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Topic :: Utilities",
+]
+dependencies = ["tomlkit>=0.13"]
+
+[project.urls]
+Homepage = "https://github.com/kadaliao/codex-profile-switcher"
+Issues = "https://github.com/kadaliao/codex-profile-switcher/issues"
+
+[project.scripts]
+codex-switch = "codex_profile_switcher.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/codex_profile_switcher"]

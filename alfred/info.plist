@@ -15,7 +15,9 @@
     <key>version</key>
     <string>1.0</string>
     <key>readme</key>
-    <string>Trigger with keyword cx. Lists profiles from ~/.codex/profiles/; ★ marks the active one. Selecting a profile runs codex-switch use &lt;name&gt;.</string>
+    <string>Trigger with keyword cx. Lists profiles from ~/.codex/profiles/; ★ marks the active one. Selecting a profile runs codex-switch use &lt;name&gt;.
+
+Requires: uv tool install git+https://github.com/kadaliao/codex-profile-switcher.git</string>
     <key>webaddress</key>
     <string></string>
     <key>connections</key>
@@ -77,7 +79,7 @@
                 <key>runningsubtext</key>
                 <string>loading profiles…</string>
                 <key>script</key>
-                <string>"$HOME/.codex/profiles/bin/codex-switch" alfred-list</string>
+                <string>"$HOME/.local/bin/codex-switch" alfred-list</string>
                 <key>scriptargtype</key>
                 <integer>1</integer>
                 <key>scriptfile</key>
@@ -106,7 +108,7 @@
                 <key>escaping</key>
                 <integer>102</integer>
                 <key>script</key>
-                <string>"$HOME/.codex/profiles/bin/codex-switch" use "$1"</string>
+                <string>"$HOME/.local/bin/codex-switch" use "$1"</string>
                 <key>scriptargtype</key>
                 <integer>1</integer>
                 <key>scriptfile</key>
