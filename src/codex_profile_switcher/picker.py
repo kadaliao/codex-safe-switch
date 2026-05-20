@@ -7,6 +7,7 @@ the command still composes.
 
 from __future__ import annotations
 
+import os
 import select
 import sys
 from typing import Optional
@@ -17,20 +18,45 @@ def is_interactive() -> bool:
 
 
 def _read_key(fd: int) -> str:
-    """Read one keypress from an already-raw fd (or a CSI escape sequence)."""
-    ch = sys.stdin.read(1)
-    if ch != "\x1b":
-        return ch
-    # Esc-prefixed sequence. Drain everything that arrives within the window;
-    # 0.05s was too tight on slower terminals and made bare arrow keys look
-    # like a lone Esc.
-    ready, _, _ = select.select([sys.stdin], [], [], 0.15)
-    if not ready:
-        return ch
-    ch += sys.stdin.read(1)
-    if ch == "\x1b[":
-        ch += sys.stdin.read(1)
-    return ch
+    """Read one keystroke from a cbreak/raw fd.
+
+    Handles three forms of arrow keys:
+      - CSI: ESC [ A/B/C/D
+      - SS3: ESC O A/B/C/D    (iTerm in application-cursor mode, etc.)
+      - bare ESC (cancel)
+    Returns "" on read errors / non-decodable bytes.
+    """
+    try:
+        first = os.read(fd, 1)
+    except OSError:
+        return ""
+    if first != b"\x1b":
+        try:
+            return first.decode()
+        except UnicodeDecodeError:
+            return ""
+    # ESC arrived. Drain whatever follows within ~200ms; bare ESC stays bare.
+    buf = first
+    deadline_passed = False
+    while not deadline_passed:
+        ready, _, _ = select.select([fd], [], [], 0.2)
+        if not ready:
+            deadline_passed = True
+            break
+        try:
+            more = os.read(fd, 16)
+        except OSError:
+            break
+        if not more:
+            break
+        buf += more
+        # Once we've grabbed the introducer + final byte we're done.
+        if len(buf) >= 3 and buf[1:2] in (b"[", b"O"):
+            break
+    try:
+        return buf.decode()
+    except UnicodeDecodeError:
+        return ""
 
 
 def pick(
@@ -75,16 +101,17 @@ def pick(
         render(first=True)
         while True:
             ch = _read_key(fd)
-            if ch in ("\x1b[A", "k"):
+            if ch in ("\x1b[A", "\x1bOA", "k"):
                 idx = (idx - 1) % len(items)
                 render(first=False)
-            elif ch in ("\x1b[B", "j"):
+            elif ch in ("\x1b[B", "\x1bOB", "j"):
                 idx = (idx + 1) % len(items)
                 render(first=False)
             elif ch in ("\r", "\n"):
                 return items[idx]
             elif ch in ("q", "\x03", "\x1b"):
                 return None
+            # any other key (including unrecognized escape sequences) is ignored
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
         sys.stdout.write("\x1b[?25h")  # show cursor again
