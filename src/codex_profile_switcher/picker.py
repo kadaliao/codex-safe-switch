@@ -16,24 +16,21 @@ def is_interactive() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def _read_key() -> str:
-    """Read one keypress (or a 3-byte escape sequence for arrow keys)."""
-    import termios
-    import tty
-
-    fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
-    try:
-        tty.setraw(fd)
-        ch = sys.stdin.read(1)
-        if ch == "\x1b":
-            # Short timeout — bare ESC vs. a CSI sequence
-            ready, _, _ = select.select([sys.stdin], [], [], 0.05)
-            if ready:
-                ch += sys.stdin.read(2)
+def _read_key(fd: int) -> str:
+    """Read one keypress from an already-raw fd (or a CSI escape sequence)."""
+    ch = sys.stdin.read(1)
+    if ch != "\x1b":
         return ch
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    # Esc-prefixed sequence. Drain everything that arrives within the window;
+    # 0.05s was too tight on slower terminals and made bare arrow keys look
+    # like a lone Esc.
+    ready, _, _ = select.select([sys.stdin], [], [], 0.15)
+    if not ready:
+        return ch
+    ch += sys.stdin.read(1)
+    if ch == "\x1b[":
+        ch += sys.stdin.read(1)
+    return ch
 
 
 def pick(
@@ -46,6 +43,9 @@ def pick(
         return None
     if not is_interactive():
         return _pick_numeric(items, active, prompt)
+
+    import termios
+    import tty
 
     idx = items.index(active) if active in items else 0
     rendered_lines = 0
@@ -66,12 +66,15 @@ def pick(
         rendered_lines = len(lines)
         sys.stdout.flush()
 
+    fd = sys.stdin.fileno()
+    old_attrs = termios.tcgetattr(fd)
     sys.stdout.write("\x1b[?25l")  # hide cursor
     sys.stdout.flush()
     try:
+        tty.setcbreak(fd)
         render(first=True)
         while True:
-            ch = _read_key()
+            ch = _read_key(fd)
             if ch in ("\x1b[A", "k"):
                 idx = (idx - 1) % len(items)
                 render(first=False)
@@ -83,6 +86,7 @@ def pick(
             elif ch in ("q", "\x03", "\x1b"):
                 return None
     finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
         sys.stdout.write("\x1b[?25h")  # show cursor again
         sys.stdout.flush()
 
