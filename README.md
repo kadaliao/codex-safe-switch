@@ -44,6 +44,8 @@ codex-switch save <name> --scope relay
                          # snapshot + seed a session-state scope immediately
 codex-switch show <name>  # print <name>'s provider.toml + auth.json key names
 codex-switch state <name> # show or set <name>'s session-state scope
+codex-switch merge-history
+                         # rewrite local history to current provider/model identity
 codex-switch rm <name>    # delete profile (the active one is protected)
 codex-switch alfred-list  # JSON for Alfred Script Filter
 ```
@@ -106,6 +108,31 @@ Suggested pattern:
 - Official `openai` / ChatGPT-login profiles: usually give them a separate scope, for example `openai`.
 
 This avoids brittle SQLite/JSONL rewrites and makes switching deterministic.
+
+## Merge History
+
+If you really want to collapse existing history across identities, use:
+
+```bash
+codex-switch merge-history
+```
+
+That rewrites local rollout JSONL metadata plus `state_5.sqlite` so they match the current `~/.codex/config.toml` identity. By default it normalizes both:
+
+- `model_provider`
+- `model`
+
+If you only want to unify official `openai` and third-party `crs` under one provider identity but keep historical model values as-is, use:
+
+```bash
+codex-switch merge-history --provider crs --keep-models
+```
+
+Notes:
+
+- A timestamped backup is created under `~/.codex/history-merge-backup-*`.
+- `--keep-models` is weaker than a full merge. If your Codex build also partitions visible history by model, you may still need a second run without `--keep-models` for the model you want to browse now.
+- This command is intentionally explicit and separate from normal `save/use/state` flows.
 
 ## Adding a relay profile
 

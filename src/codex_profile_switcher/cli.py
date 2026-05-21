@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from datetime import datetime
 import json
 import os
 import shutil
 import stat
+import sqlite3
 import sys
 import tempfile
 from pathlib import Path
@@ -49,6 +51,12 @@ class SessionConfig:
         return "shared"
 
 
+@dataclass(frozen=True)
+class IdentityConfig:
+    provider: Optional[str]
+    model: Optional[str]
+
+
 def profile_root() -> Path:
     return Path(os.environ.get("CODEX_PROFILE_ROOT") or Path.home() / ".codex" / "profiles")
 
@@ -71,6 +79,15 @@ def active_name() -> Optional[str]:
         return None
     name = p.read_text().strip()
     return name or None
+
+
+def current_identity() -> IdentityConfig:
+    cfg = _swap.load(codex_dir() / "config.toml")
+    provider = cfg.get("model_provider")
+    model = cfg.get("model")
+    provider = str(provider).strip() if provider is not None else None
+    model = str(model).strip() if model is not None else None
+    return IdentityConfig(provider=provider or None, model=model or None)
 
 
 def list_profiles() -> list[str]:
@@ -196,6 +213,164 @@ def maybe_switch_session_state(current_name: Optional[str], next_name: str, code
         return
     save_session_state(current_cfg, codex)
     restore_session_state(next_cfg, codex)
+
+
+def iter_rollout_files(codex: Path) -> list[Path]:
+    files: list[Path] = []
+    sessions = codex / "sessions"
+    archived = codex / "archived_sessions"
+    if sessions.exists():
+        files.extend(sorted(p for p in sessions.rglob("*.jsonl") if p.is_file()))
+    if archived.exists():
+        files.extend(sorted(p for p in archived.glob("*.jsonl") if p.is_file()))
+    return files
+
+
+def backup_root(codex: Path, label: str) -> Path:
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    root = codex / f"{label}-{stamp}"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def backup_copy(src: Path, backup_dir: Path, codex: Path) -> None:
+    if not src.exists():
+        return
+    rel = src.relative_to(codex)
+    dst = backup_dir / rel
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+
+
+def normalize_rollout_file(
+    path: Path,
+    target: IdentityConfig,
+    keep_models: bool,
+    *,
+    apply: bool = True,
+) -> tuple[int, bool]:
+    lines_out: list[str] = []
+    changed_lines = 0
+    changed = False
+    original_stat = path.stat()
+    with path.open() as fh:
+        for raw in fh:
+            try:
+                item = json.loads(raw)
+            except json.JSONDecodeError:
+                lines_out.append(raw)
+                continue
+
+            item_changed = False
+            payload = item.get("payload")
+            if isinstance(payload, dict):
+                if item.get("type") == "session_meta" and target.provider:
+                    if payload.get("model_provider") != target.provider:
+                        payload["model_provider"] = target.provider
+                        item_changed = True
+                elif item.get("type") == "turn_context":
+                    if target.provider and payload.get("model_provider") != target.provider:
+                        payload["model_provider"] = target.provider
+                        item_changed = True
+                    if not keep_models and target.model and payload.get("model") != target.model:
+                        payload["model"] = target.model
+                        item_changed = True
+
+            if item_changed:
+                changed = True
+                changed_lines += 1
+                lines_out.append(json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n")
+            else:
+                lines_out.append(raw)
+
+    if changed and apply:
+        fd, tmp_str = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
+        os.close(fd)
+        tmp = Path(tmp_str)
+        try:
+            tmp.write_text("".join(lines_out))
+            _copy_mode(path, tmp)
+            os.replace(tmp, path)
+        finally:
+            if tmp.exists():
+                tmp.unlink(missing_ok=True)
+        os.utime(path, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+    return changed_lines, changed
+
+
+def normalize_state_db(path: Path, target: IdentityConfig, keep_models: bool) -> int:
+    if not path.exists():
+        return 0
+    conn = sqlite3.connect(path)
+    try:
+        cur = conn.cursor()
+        if keep_models:
+            if not target.provider:
+                return 0
+            count = cur.execute(
+                "SELECT COUNT(*) FROM threads WHERE model_provider != ?",
+                (target.provider,),
+            ).fetchone()[0]
+            cur.execute("UPDATE threads SET model_provider = ? WHERE model_provider != ?", (target.provider, target.provider))
+        else:
+            if not target.provider or not target.model:
+                return 0
+            count = cur.execute(
+                "SELECT COUNT(*) FROM threads WHERE model_provider != ? OR ifnull(model, '') != ?",
+                (target.provider, target.model),
+            ).fetchone()[0]
+            cur.execute(
+                "UPDATE threads SET model_provider = ?, model = ? WHERE model_provider != ? OR ifnull(model, '') != ?",
+                (target.provider, target.model, target.provider, target.model),
+            )
+        conn.commit()
+        return int(count)
+    finally:
+        conn.close()
+
+
+def cmd_merge_history(args) -> int:
+    codex = codex_dir()
+    identity = current_identity()
+    provider = args.provider or identity.provider
+    model = identity.model if args.model is None else args.model
+
+    if not provider:
+        _die("target provider is empty; pass --provider or set model_provider in ~/.codex/config.toml")
+    if not args.keep_models and not model:
+        _die("target model is empty; pass --model or use --keep-models")
+
+    target = IdentityConfig(provider=provider, model=model)
+    rollout_files = iter_rollout_files(codex)
+    state_db = codex / "state_5.sqlite"
+    backup_dir = backup_root(codex, "history-merge-backup")
+    changed_files = 0
+    changed_lines = 0
+
+    for path in rollout_files:
+        line_count, changed = normalize_rollout_file(path, target, args.keep_models, apply=False)
+        if changed:
+            backup_copy(path, backup_dir, codex)
+            line_count, _ = normalize_rollout_file(path, target, args.keep_models)
+            changed_files += 1
+            changed_lines += line_count
+
+    state_rows = 0
+    if state_db.exists():
+        backup_copy(state_db, backup_dir, codex)
+        for suffix in ("-shm", "-wal"):
+            sidecar = codex / f"state_5.sqlite{suffix}"
+            backup_copy(sidecar, backup_dir, codex)
+        state_rows = normalize_state_db(state_db, target, args.keep_models)
+
+    mode = "provider-only" if args.keep_models else "provider+model"
+    model_desc = "(preserved)" if args.keep_models else target.model
+    print(f"merged history → provider={target.provider} model={model_desc} mode={mode}")
+    print(f"backup → {backup_dir}")
+    print(f"rollout files updated → {changed_files}")
+    print(f"rollout lines updated → {changed_lines}")
+    print(f"state rows updated → {state_rows}")
+    return 0
 
 
 def cmd_ls(_args) -> int:
@@ -444,6 +619,16 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--scope", help="store/restore Codex history state under this shared scope")
     s.add_argument("--shared", action="store_true", help="disable session-state swapping for this profile")
     s.set_defaults(func=cmd_state)
+
+    s = subs.add_parser("merge-history", help="rewrite local Codex history metadata into one provider/model identity")
+    s.add_argument("--provider", help="target provider; defaults to current ~/.codex/config.toml model_provider")
+    s.add_argument("--model", help="target model; defaults to current ~/.codex/config.toml model")
+    s.add_argument(
+        "--keep-models",
+        action="store_true",
+        help="only normalize provider identity and keep existing per-thread model values",
+    )
+    s.set_defaults(func=cmd_merge_history)
 
     s = subs.add_parser("rm", aliases=["remove"], help="delete profile (active is protected)")
     s.add_argument("name")
