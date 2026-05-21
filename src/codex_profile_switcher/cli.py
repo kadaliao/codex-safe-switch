@@ -7,11 +7,13 @@ Storage layout:
       └── <name>/
             ├── auth.json           # copied to ~/.codex/auth.json
             └── provider.toml       # merged into ~/.codex/config.toml
+            └── session.toml        # optional session-state scope metadata
 """
 
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import json
 import os
 import shutil
@@ -21,8 +23,30 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
+import tomlkit
+
 from . import _swap
 from .picker import pick
+
+
+SESSION_STATE_FILES = (
+    "history.jsonl",
+    "session_index.jsonl",
+    "state_5.sqlite",
+    "state_5.sqlite-shm",
+    "state_5.sqlite-wal",
+)
+
+
+@dataclass(frozen=True)
+class SessionConfig:
+    mode: str = "shared"
+    scope: Optional[str] = None
+
+    def describe(self) -> str:
+        if self.mode == "scoped":
+            return f"scoped ({self.scope})"
+        return "shared"
 
 
 def profile_root() -> Path:
@@ -35,6 +59,10 @@ def codex_dir() -> Path:
 
 def active_file() -> Path:
     return profile_root() / ".active"
+
+
+def session_state_root() -> Path:
+    return profile_root() / ".session-state"
 
 
 def active_name() -> Optional[str]:
@@ -84,6 +112,92 @@ def _copy_mode(ref: Optional[Path], target: Path) -> None:
         os.chmod(target, 0o600)
 
 
+def session_config_path(profile_dir: Path) -> Path:
+    return profile_dir / "session.toml"
+
+
+def load_session_config(profile_dir: Path) -> SessionConfig:
+    path = session_config_path(profile_dir)
+    if not path.exists() or path.stat().st_size == 0:
+        return SessionConfig()
+    try:
+        doc = tomlkit.parse(path.read_text())
+    except Exception as exc:  # pragma: no cover - defensive config parsing
+        _die(f"invalid {path}: {exc}")
+    mode = str(doc.get("mode", "shared")).strip() or "shared"
+    if mode not in {"shared", "scoped"}:
+        _die(f"invalid {path}: mode must be 'shared' or 'scoped'")
+    scope = doc.get("scope")
+    scope = str(scope).strip() if scope is not None else None
+    if mode == "scoped" and not scope:
+        _die(f"invalid {path}: scoped mode requires a non-empty scope")
+    return SessionConfig(mode=mode, scope=scope)
+
+
+def write_session_config(profile_dir: Path, config: SessionConfig) -> None:
+    path = session_config_path(profile_dir)
+    if config.mode == "shared":
+        path.unlink(missing_ok=True)
+        return
+    doc = tomlkit.document()
+    doc["mode"] = config.mode
+    doc["scope"] = config.scope
+    path.write_text(tomlkit.dumps(doc))
+
+
+def session_scope_dir(scope: str) -> Path:
+    return session_state_root() / scope
+
+
+def _copy_optional(src: Path, dst: Path) -> None:
+    if src.exists():
+        _atomic_write_copy(src, dst)
+    else:
+        dst.unlink(missing_ok=True)
+
+
+def save_session_state(config: SessionConfig, codex: Path) -> None:
+    if config.mode != "scoped" or not config.scope:
+        return
+    scope_dir = session_scope_dir(config.scope)
+    scope_dir.mkdir(parents=True, exist_ok=True)
+    for rel in SESSION_STATE_FILES:
+        src = codex / rel
+        dst = scope_dir / rel
+        _copy_optional(src, dst)
+
+
+def clear_session_state(codex: Path) -> None:
+    for rel in SESSION_STATE_FILES:
+        (codex / rel).unlink(missing_ok=True)
+
+
+def restore_session_state(config: SessionConfig, codex: Path) -> None:
+    if config.mode != "scoped" or not config.scope:
+        return
+    scope_dir = session_scope_dir(config.scope)
+    if not scope_dir.exists():
+        clear_session_state(codex)
+        return
+    for rel in SESSION_STATE_FILES:
+        src = scope_dir / rel
+        dst = codex / rel
+        _copy_optional(src, dst)
+
+
+def maybe_switch_session_state(current_name: Optional[str], next_name: str, codex: Path) -> None:
+    current_cfg = SessionConfig()
+    next_cfg = load_session_config(profile_root() / next_name)
+    if current_name:
+        current_dir = profile_root() / current_name
+        if current_dir.is_dir():
+            current_cfg = load_session_config(current_dir)
+    if current_cfg == next_cfg:
+        return
+    save_session_state(current_cfg, codex)
+    restore_session_state(next_cfg, codex)
+
+
 def cmd_ls(_args) -> int:
     active = active_name()
     for name in list_profiles():
@@ -126,6 +240,7 @@ def cmd_use(args) -> int:
     codex.mkdir(parents=True, exist_ok=True)
     cfg = codex / "config.toml"
     auth = codex / "auth.json"
+    current = active_name()
 
     if not cfg.exists():
         cfg.touch()
@@ -143,6 +258,7 @@ def cmd_use(args) -> int:
             tmp_cfg.unlink(missing_ok=True)
 
     _atomic_write_copy(auth_src, auth)
+    maybe_switch_session_state(current, name, codex)
 
     active_file().write_text(name + "\n")
     print(f"switched → {name}")
@@ -153,6 +269,8 @@ def cmd_save(args) -> int:
     name = args.name
     if name in {"bin", ".active"} or name.startswith("."):
         _die(f"reserved name: {name}")
+    if args.shared and args.scope:
+        _die("choose either --shared or --scope, not both")
     dir_ = profile_root() / name
     dir_.mkdir(parents=True, exist_ok=True)
 
@@ -166,6 +284,18 @@ def cmd_save(args) -> int:
         _swap.extract(cfg, dir_ / "provider.toml")
     else:
         (dir_ / "provider.toml").write_text("")
+
+    if args.shared:
+        session_cfg = SessionConfig()
+        write_session_config(dir_, session_cfg)
+    elif args.scope:
+        scope = args.scope.strip()
+        if not scope:
+            _die("scope must not be empty")
+        session_cfg = SessionConfig(mode="scoped", scope=scope)
+        write_session_config(dir_, session_cfg)
+        save_session_state(session_cfg, codex)
+
     print(f"saved → {name}")
     return 0
 
@@ -194,6 +324,10 @@ def cmd_show(args) -> int:
             print(f"(invalid json: {e})")
     else:
         print("(missing)")
+    print()
+    print(f"# {session_config_path(dir_)}")
+    session_cfg = load_session_config(dir_)
+    print(session_cfg.describe())
     return 0
 
 
@@ -206,6 +340,37 @@ def cmd_rm(args) -> int:
         _die(f"cannot remove the active profile: {name}")
     shutil.rmtree(dir_)
     print(f"removed → {name}")
+    return 0
+
+
+def cmd_state(args) -> int:
+    name = args.name
+    dir_ = profile_root() / name
+    if not dir_.is_dir():
+        _die(f"profile not found: {name}")
+
+    if args.shared and args.scope:
+        _die("choose either --shared or --scope, not both")
+
+    if not args.shared and not args.scope:
+        print(load_session_config(dir_).describe())
+        return 0
+
+    if args.shared:
+        cfg = SessionConfig()
+    else:
+        scope = args.scope.strip()
+        if not scope:
+            _die("scope must not be empty")
+        cfg = SessionConfig(mode="scoped", scope=scope)
+
+    write_session_config(dir_, cfg)
+
+    current = active_name()
+    if name == current or current is None:
+        save_session_state(cfg, codex_dir())
+
+    print(f"{name}: session state → {cfg.describe()}")
     return 0
 
 
@@ -266,11 +431,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = subs.add_parser("save", help="snapshot the current ~/.codex state as <name>")
     s.add_argument("name")
+    s.add_argument("--scope", help="also bind this profile to a session-state scope and seed it now")
+    s.add_argument("--shared", action="store_true", help="clear any session-state scope while saving")
     s.set_defaults(func=cmd_save)
 
     s = subs.add_parser("show", help="print <name>'s provider.toml + auth.json keys")
     s.add_argument("name")
     s.set_defaults(func=cmd_show)
+
+    s = subs.add_parser("state", help="show or set <name>'s session-state scope")
+    s.add_argument("name")
+    s.add_argument("--scope", help="store/restore Codex history state under this shared scope")
+    s.add_argument("--shared", action="store_true", help="disable session-state swapping for this profile")
+    s.set_defaults(func=cmd_state)
 
     s = subs.add_parser("rm", aliases=["remove"], help="delete profile (active is protected)")
     s.add_argument("name")

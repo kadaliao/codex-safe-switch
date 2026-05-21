@@ -2,7 +2,9 @@
 
 One-key switch between [OpenAI Codex CLI](https://github.com/openai/codex) configurations — official ChatGPT login, third-party relays, multiple API keys, whatever. CLI + optional Alfred workflow.
 
-Each profile owns the *provider* slice of `~/.codex/config.toml` (model, `[model_providers.*]`, auth method) plus its own `auth.json`. Your local state (trusted projects, plugins, marketplaces, MCP servers, TUI prefs) is left untouched on every switch.
+Each profile owns the *provider* slice of `~/.codex/config.toml` (model, `[model_providers.*]`, auth method) plus its own `auth.json`. By default your local state (trusted projects, plugins, marketplaces, MCP servers, TUI prefs, history DB/index) is left untouched on every switch.
+
+If you want history to follow a provider/model family instead of one global Codex state, profiles can also opt into a session-state scope. That makes `codex-switch` save/restore the visible history files (`state_5.sqlite`, `history.jsonl`, `session_index.jsonl`) when you switch.
 
 ## Install
 
@@ -38,7 +40,10 @@ codex-switch ls           # list profiles, ★ marks the active one
 codex-switch current      # print the active profile
 codex-switch use [name]   # load <name>; omit for the picker
 codex-switch save <name>  # snapshot the current ~/.codex state as <name>
+codex-switch save <name> --scope relay
+                         # snapshot + seed a session-state scope immediately
 codex-switch show <name>  # print <name>'s provider.toml + auth.json key names
+codex-switch state <name> # show or set <name>'s session-state scope
 codex-switch rm <name>    # delete profile (the active one is protected)
 codex-switch alfred-list  # JSON for Alfred Script Filter
 ```
@@ -52,7 +57,8 @@ The picker auto-falls back to a numeric menu when stdin/stdout aren't TTYs (pipe
 ├── .active                       # plaintext: name of the active profile
 ├── chatgpt-official/
 │   ├── auth.json                 # full file copied into ~/.codex/auth.json
-│   └── provider.toml             # empty = use ChatGPT login
+│   ├── provider.toml             # empty = use ChatGPT login
+│   └── session.toml              # optional; omitted = share one global history state
 └── myrelay/
     ├── auth.json                 # {"OPENAI_API_KEY": "sk-..."}
     └── provider.toml             # only provider-related keys (see examples/)
@@ -63,6 +69,43 @@ The following top-level keys + tables are owned by a profile (swapped on `use`);
 - `model`, `model_provider`, `model_reasoning_effort`, `model_reasoning_summary`, `model_verbosity`
 - `wire_api`, `disable_response_storage`, `preferred_auth_method`
 - `[model_providers.*]`
+
+## Session-state scopes
+
+Codex's history visibility can split when `model_provider` or `model` changes. The clean fix is to treat "backend config" and "history state" as separate concerns:
+
+- Keep one shared scope for profiles that should share visible history.
+- Give incompatible profiles their own scope so switching back restores the matching history DB/index.
+
+Configure it with:
+
+```bash
+codex-switch save douban --scope relay
+codex-switch state aihezu --scope relay
+codex-switch state chatgpt-official --scope openai
+```
+
+That creates `session.toml` like:
+
+```toml
+mode = "scoped"
+scope = "relay"
+```
+
+When two profiles use the same scope, they share the same `history.jsonl`, `session_index.jsonl`, and `state_5.sqlite`. When a profile uses a different scope, `codex-switch use` saves the current scope's files under `~/.codex/profiles/.session-state/<scope>/` and restores the target scope's files.
+
+Disable state swapping again with:
+
+```bash
+codex-switch state <name> --shared
+```
+
+Suggested pattern:
+
+- Relay/API-key profiles that should feel like one Codex identity: put them on the same scope, for example `relay`.
+- Official `openai` / ChatGPT-login profiles: usually give them a separate scope, for example `openai`.
+
+This avoids brittle SQLite/JSONL rewrites and makes switching deterministic.
 
 ## Adding a relay profile
 
