@@ -87,8 +87,8 @@ class CodexSwitchCliTests(unittest.TestCase):
             ])
         )
 
-        write_rollout(self.codex_home / "sessions" / "2026" / "05" / "test.jsonl", "relay")
-        write_threads_db(self.codex_home / "state_5.sqlite", "relay")
+        write_rollout(self.codex_home / "sessions" / "2026" / "05" / "test.jsonl", "relay", model="gpt-5.5")
+        write_threads_db(self.codex_home / "state_5.sqlite", "relay", model="gpt-5.5")
 
         self.run_cli("use", "openai")
 
@@ -98,13 +98,15 @@ class CodexSwitchCliTests(unittest.TestCase):
         self.assertEqual((self.profile_root / ".active").read_text().strip(), "official")
         rollout = (self.codex_home / "sessions" / "2026" / "05" / "test.jsonl").read_text()
         self.assertIn('"model_provider":"openai"', rollout)
+        self.assertIn('"model":"gpt-5.4"', rollout)
 
         conn = sqlite3.connect(self.codex_home / "state_5.sqlite")
         try:
-            provider = conn.execute("SELECT model_provider FROM threads").fetchone()[0]
+            provider, model = conn.execute("SELECT model_provider, model FROM threads").fetchone()
         finally:
             conn.close()
         self.assertEqual(provider, "openai")
+        self.assertEqual(model, "gpt-5.4")
 
     def test_use_profile_auto_merges_history_to_target_provider(self) -> None:
         self.set_current_official()
@@ -114,7 +116,7 @@ class CodexSwitchCliTests(unittest.TestCase):
         write_json(relay_dir / "auth.json", {"auth_mode": "apikey", "OPENAI_API_KEY": "relay"})
         (relay_dir / "provider.toml").write_text(
             '\n'.join([
-                'model = "gpt-5.4"',
+                'model = "gpt-5.5"',
                 'model_provider = "relay"',
                 'preferred_auth_method = "apikey"',
                 '',
@@ -127,8 +129,8 @@ class CodexSwitchCliTests(unittest.TestCase):
             ])
         )
 
-        write_rollout(self.codex_home / "sessions" / "2026" / "05" / "test.jsonl", "openai")
-        write_threads_db(self.codex_home / "state_5.sqlite", "openai")
+        write_rollout(self.codex_home / "sessions" / "2026" / "05" / "test.jsonl", "openai", model="gpt-5.4")
+        write_threads_db(self.codex_home / "state_5.sqlite", "openai", model="gpt-5.4")
 
         self.run_cli("use", "relay")
 
@@ -137,13 +139,34 @@ class CodexSwitchCliTests(unittest.TestCase):
         self.assertEqual((self.profile_root / ".active").read_text().strip(), "relay")
         rollout = (self.codex_home / "sessions" / "2026" / "05" / "test.jsonl").read_text()
         self.assertIn('"model_provider":"relay"', rollout)
+        self.assertIn('"model":"gpt-5.5"', rollout)
 
         conn = sqlite3.connect(self.codex_home / "state_5.sqlite")
         try:
-            provider = conn.execute("SELECT model_provider FROM threads").fetchone()[0]
+            provider, model = conn.execute("SELECT model_provider, model FROM threads").fetchone()
         finally:
             conn.close()
         self.assertEqual(provider, "relay")
+        self.assertEqual(model, "gpt-5.5")
+
+    def test_merge_history_keep_models_preserves_existing_thread_models(self) -> None:
+        self.set_current_official()
+        write_rollout(self.codex_home / "sessions" / "2026" / "05" / "test.jsonl", "relay", model="gpt-5.5")
+        write_threads_db(self.codex_home / "state_5.sqlite", "relay", model="gpt-5.5")
+
+        self.run_cli("merge-history", "--provider", "openai", "--keep-models")
+
+        rollout = (self.codex_home / "sessions" / "2026" / "05" / "test.jsonl").read_text()
+        self.assertIn('"model_provider":"openai"', rollout)
+        self.assertIn('"model":"gpt-5.5"', rollout)
+
+        conn = sqlite3.connect(self.codex_home / "state_5.sqlite")
+        try:
+            provider, model = conn.execute("SELECT model_provider, model FROM threads").fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(provider, "openai")
+        self.assertEqual(model, "gpt-5.5")
 
 
 if __name__ == "__main__":

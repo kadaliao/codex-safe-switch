@@ -417,14 +417,22 @@ def merge_history_to_target(codex: Path, target: IdentityConfig, keep_models: bo
     return changed_files, changed_lines, state_rows, backup_dir
 
 
-def maybe_auto_merge_history(codex: Path, *, keep_models: bool = True) -> None:
+def maybe_auto_merge_history(codex: Path, *, keep_models: bool = False) -> None:
     target = current_identity()
     if not target.provider:
         return
-    changed_files, changed_lines, state_rows, backup_dir = merge_history_to_target(codex, target, keep_models)
+    effective_keep_models = keep_models or not target.model
+    changed_files, changed_lines, state_rows, backup_dir = merge_history_to_target(
+        codex,
+        target,
+        effective_keep_models,
+    )
     if changed_files or state_rows:
+        mode = "provider-only" if effective_keep_models else "provider+model"
+        model_desc = "(preserved)" if effective_keep_models else target.model
         print(
             f"history aligned → provider={target.provider} "
+            f"model={model_desc} mode={mode} "
             f"files={changed_files} lines={changed_lines} state_rows={state_rows}"
         )
         if backup_dir is not None:

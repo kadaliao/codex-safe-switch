@@ -58,11 +58,11 @@ The picker auto-falls back to a numeric menu when stdin/stdout aren't TTYs (pipe
 
 ## Shared history by default
 
-After every `use` / `official` switch, `codex-switch` automatically aligns local Codex history metadata to the active provider identity.
+After every `use` / `official` switch, `codex-switch` automatically aligns local Codex history metadata to the active provider and model identity.
 
 - You no longer need to remember `merge-history` during normal profile switching.
-- This keeps session history visible when moving between relay profiles and the official OpenAI login.
-- `merge-history` still exists as a manual repair command if you want to run it explicitly.
+- This keeps session history visible when moving between relay profiles and the official OpenAI login, including surfaces that filter by model id.
+- `merge-history --keep-models` still exists if you want a provider-only repair and need to preserve historical per-thread model ids.
 
 ## Profile format
 
