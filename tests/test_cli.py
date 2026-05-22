@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import redirect_stdout
+import io
 import json
 import os
 from pathlib import Path
@@ -56,6 +58,16 @@ class CodexSwitchCliTests(unittest.TestCase):
         with patch.dict(os.environ, self.env, clear=False):
             return cli.main(list(argv))
 
+    def run_cli_output(self, *argv: str) -> tuple[int, str]:
+        buf = io.StringIO()
+        with patch.dict(os.environ, self.env, clear=False), redirect_stdout(buf):
+            code = cli.main(list(argv))
+        return code, buf.getvalue()
+
+    def snapshot_official(self) -> None:
+        with patch.dict(os.environ, self.env, clear=False):
+            cli.snapshot_official_state(self.codex_home)
+
     def read_config(self) -> str:
         return (self.codex_home / "config.toml").read_text()
 
@@ -67,7 +79,7 @@ class CodexSwitchCliTests(unittest.TestCase):
 
     def test_use_openai_alias_restores_official_snapshot_and_merges_history(self) -> None:
         self.set_current_official()
-        cli.snapshot_official_state(self.codex_home)
+        self.snapshot_official()
 
         relay_dir = self.profile_root / "relay"
         relay_dir.mkdir()
@@ -167,6 +179,53 @@ class CodexSwitchCliTests(unittest.TestCase):
             conn.close()
         self.assertEqual(provider, "openai")
         self.assertEqual(model, "gpt-5.5")
+
+    def test_merge_history_dry_run_reports_without_writing_files(self) -> None:
+        self.set_current_official()
+        rollout_path = self.codex_home / "sessions" / "2026" / "05" / "test.jsonl"
+        db_path = self.codex_home / "state_5.sqlite"
+        write_rollout(rollout_path, "relay", model="gpt-5.5")
+        write_threads_db(db_path, "relay", model="gpt-5.5")
+        rollout_before = rollout_path.read_text()
+
+        _code, output = self.run_cli_output("merge-history", "--provider", "openai", "--dry-run")
+
+        self.assertIn("would merge history", output)
+        self.assertIn("backup →", output)
+        self.assertIn("(would create)", output)
+        self.assertIn("rollout files would update → 1", output)
+        self.assertIn("rollout lines would update → 2", output)
+        self.assertIn("state rows would update → 1", output)
+        self.assertEqual(rollout_path.read_text(), rollout_before)
+        self.assertFalse(list(self.codex_home.glob("history-merge-backup-*")))
+
+        conn = sqlite3.connect(db_path)
+        try:
+            provider, model = conn.execute("SELECT model_provider, model FROM threads").fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(provider, "relay")
+        self.assertEqual(model, "gpt-5.5")
+
+    def test_doctor_history_prints_current_state_and_drift(self) -> None:
+        self.set_current_official()
+        self.snapshot_official()
+        (self.profile_root / ".active").write_text("official\n")
+        write_threads_db(self.codex_home / "state_5.sqlite", "relay", model="gpt-5.5")
+
+        _code, output = self.run_cli_output("doctor-history")
+
+        self.assertIn("history doctor", output)
+        self.assertIn("current profile → official", output)
+        self.assertIn("current config → provider=openai model=gpt-5.4", output)
+        self.assertIn("session state → shared", output)
+        self.assertIn("threads provider/model distribution:", output)
+        self.assertIn("provider=relay model=gpt-5.5", output)
+        self.assertIn("recent threads:", output)
+        self.assertIn("sqlite provider/model drift → yes", output)
+        self.assertIn("planned history alignment →", output)
+        self.assertIn("rollout metadata drift → no", output)
+        self.assertIn("provider/model drift → yes", output)
 
 
 if __name__ == "__main__":

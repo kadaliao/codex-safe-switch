@@ -42,6 +42,10 @@ codex-switch use [name]   # load <name>; omit for the picker
 codex-switch save <name>  # snapshot the current ~/.codex state as <name>
 codex-switch show <name>  # print <name>'s provider.toml + auth.json key names
 codex-switch state <name> # show/set the session-state scope for a profile
+codex-switch merge-history --dry-run
+                           # preview history metadata changes without writing files
+codex-switch doctor-history
+                           # inspect current history provider/model state read-only
 codex-switch rm <name>    # delete profile (the active one is protected)
 codex-switch alfred-list  # JSON for Alfred Script Filter
 ```
@@ -63,6 +67,8 @@ After every `use` / `official` switch, `codex-switch` automatically aligns local
 - You no longer need to remember `merge-history` during normal profile switching.
 - This keeps session history visible when moving between relay profiles and the official OpenAI login, including surfaces that filter by model id.
 - `merge-history --keep-models` still exists if you want a provider-only repair and need to preserve historical per-thread model ids.
+- `merge-history --dry-run` reports rollout files/lines, SQLite rows, and the backup path it would create without writing anything.
+- `doctor-history` is read-only and summarizes the active profile, current provider/model, session-state mode, SQLite `threads` distribution, recent threads, planned alignment counts, and provider/model drift.
 
 ## Profile format
 

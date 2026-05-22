@@ -62,6 +62,14 @@ class IdentityConfig:
     model: Optional[str]
 
 
+@dataclass(frozen=True)
+class MergeHistoryResult:
+    changed_files: int
+    changed_lines: int
+    state_rows: int
+    backup_dir: Optional[Path]
+
+
 def profile_root() -> Path:
     return Path(os.environ.get("CODEX_PROFILE_ROOT") or Path.home() / ".codex" / "profiles")
 
@@ -255,9 +263,13 @@ def iter_rollout_files(codex: Path) -> list[Path]:
     return files
 
 
-def backup_root(codex: Path, label: str) -> Path:
+def backup_path(codex: Path, label: str) -> Path:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    root = codex / f"{label}-{stamp}"
+    return codex / f"{label}-{stamp}"
+
+
+def backup_root(codex: Path, label: str) -> Path:
+    root = backup_path(codex, label)
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -358,10 +370,14 @@ def normalize_state_db(path: Path, target: IdentityConfig, keep_models: bool) ->
         conn.close()
 
 
+def connect_sqlite_readonly(path: Path) -> sqlite3.Connection:
+    return sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+
+
 def count_state_rows_to_normalize(path: Path, target: IdentityConfig, keep_models: bool) -> int:
     if not path.exists():
         return 0
-    conn = sqlite3.connect(path)
+    conn = connect_sqlite_readonly(path)
     try:
         cur = conn.cursor()
         if keep_models:
@@ -385,7 +401,110 @@ def count_state_rows_to_normalize(path: Path, target: IdentityConfig, keep_model
         conn.close()
 
 
-def merge_history_to_target(codex: Path, target: IdentityConfig, keep_models: bool) -> tuple[int, int, int, Optional[Path]]:
+def sqlite_threads_columns(conn: sqlite3.Connection) -> list[str]:
+    found = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'threads'"
+    ).fetchone()
+    if not found:
+        return []
+    return [str(row[1]) for row in conn.execute("PRAGMA table_info(threads)").fetchall()]
+
+
+def _fmt_value(value) -> str:
+    if value is None or value == "":
+        return "(empty)"
+    return str(value)
+
+
+def read_thread_distribution(path: Path) -> tuple[list[tuple[str, str, int]], Optional[str]]:
+    if not path.exists():
+        return [], "missing state_5.sqlite"
+    conn = connect_sqlite_readonly(path)
+    try:
+        columns = sqlite_threads_columns(conn)
+        if not columns:
+            return [], "missing threads table"
+        if "model_provider" not in columns or "model" not in columns:
+            return [], "threads table missing model_provider/model columns"
+        rows = conn.execute(
+            """
+            SELECT ifnull(model_provider, ''), ifnull(model, ''), COUNT(*)
+            FROM threads
+            GROUP BY ifnull(model_provider, ''), ifnull(model, '')
+            ORDER BY COUNT(*) DESC, ifnull(model_provider, ''), ifnull(model, '')
+            """
+        ).fetchall()
+        return [(str(provider), str(model), int(count)) for provider, model, count in rows], None
+    except sqlite3.Error as exc:
+        return [], str(exc)
+    finally:
+        conn.close()
+
+
+def read_recent_threads(path: Path, limit: int = 5) -> tuple[list[dict[str, object]], Optional[str]]:
+    if not path.exists():
+        return [], "missing state_5.sqlite"
+    conn = connect_sqlite_readonly(path)
+    try:
+        columns = sqlite_threads_columns(conn)
+        if not columns:
+            return [], "missing threads table"
+        selected = [c for c in ("id", "thread_id", "title", "model_provider", "model", "updated_at", "created_at") if c in columns]
+        if not selected:
+            return [], "threads table has no displayable columns"
+        order_col = next((c for c in ("updated_at", "created_at") if c in columns), None)
+        select_sql = ", ".join(f'"{c}"' for c in selected)
+        order_sql = f' ORDER BY "{order_col}" DESC' if order_col else " ORDER BY rowid DESC"
+        rows = conn.execute(f"SELECT rowid, {select_sql} FROM threads{order_sql} LIMIT ?", (limit,)).fetchall()
+        recent = []
+        for row in rows:
+            item = {"rowid": row[0]}
+            item.update({name: value for name, value in zip(selected, row[1:])})
+            recent.append(item)
+        return recent, None
+    except sqlite3.Error as exc:
+        return [], str(exc)
+    finally:
+        conn.close()
+
+
+def has_provider_model_drift(
+    distribution: list[tuple[str, str, int]],
+    identity: IdentityConfig,
+) -> Optional[bool]:
+    if not distribution:
+        return None
+    if not identity.provider:
+        return None
+    for provider, model, _count in distribution:
+        if provider != identity.provider:
+            return True
+        if identity.model and model != identity.model:
+            return True
+    return False
+
+
+def plan_merge_history_to_target(codex: Path, target: IdentityConfig, keep_models: bool) -> MergeHistoryResult:
+    rollout_files = iter_rollout_files(codex)
+    state_db = codex / "state_5.sqlite"
+    changed_files = 0
+    changed_lines = 0
+
+    for path in rollout_files:
+        line_count, changed = normalize_rollout_file(path, target, keep_models, apply=False)
+        if changed:
+            changed_files += 1
+            changed_lines += line_count
+
+    state_rows = 0
+    if state_db.exists():
+        state_rows = count_state_rows_to_normalize(state_db, target, keep_models)
+
+    backup_dir = backup_path(codex, "history-merge-backup") if changed_files or state_rows else None
+    return MergeHistoryResult(changed_files, changed_lines, state_rows, backup_dir)
+
+
+def merge_history_to_target(codex: Path, target: IdentityConfig, keep_models: bool) -> MergeHistoryResult:
     rollout_files = iter_rollout_files(codex)
     state_db = codex / "state_5.sqlite"
     backup_dir: Optional[Path] = None
@@ -414,7 +533,7 @@ def merge_history_to_target(codex: Path, target: IdentityConfig, keep_models: bo
                 backup_copy(sidecar, backup_dir, codex)
             state_rows = normalize_state_db(state_db, target, keep_models)
 
-    return changed_files, changed_lines, state_rows, backup_dir
+    return MergeHistoryResult(changed_files, changed_lines, state_rows, backup_dir)
 
 
 def maybe_auto_merge_history(codex: Path, *, keep_models: bool = False) -> None:
@@ -422,21 +541,21 @@ def maybe_auto_merge_history(codex: Path, *, keep_models: bool = False) -> None:
     if not target.provider:
         return
     effective_keep_models = keep_models or not target.model
-    changed_files, changed_lines, state_rows, backup_dir = merge_history_to_target(
+    result = merge_history_to_target(
         codex,
         target,
         effective_keep_models,
     )
-    if changed_files or state_rows:
+    if result.changed_files or result.state_rows:
         mode = "provider-only" if effective_keep_models else "provider+model"
         model_desc = "(preserved)" if effective_keep_models else target.model
         print(
             f"history aligned → provider={target.provider} "
             f"model={model_desc} mode={mode} "
-            f"files={changed_files} lines={changed_lines} state_rows={state_rows}"
+            f"files={result.changed_files} lines={result.changed_lines} state_rows={result.state_rows}"
         )
-        if backup_dir is not None:
-            print(f"history backup → {backup_dir}")
+        if result.backup_dir is not None:
+            print(f"history backup → {result.backup_dir}")
 
 
 def current_looks_official(codex: Path) -> bool:
@@ -537,15 +656,87 @@ def cmd_merge_history(args) -> int:
         _die("target model is empty; pass --model or use --keep-models")
 
     target = IdentityConfig(provider=provider, model=model)
-    changed_files, changed_lines, state_rows, backup_dir = merge_history_to_target(codex, target, args.keep_models)
+    if args.dry_run:
+        result = plan_merge_history_to_target(codex, target, args.keep_models)
+    else:
+        result = merge_history_to_target(codex, target, args.keep_models)
 
     mode = "provider-only" if args.keep_models else "provider+model"
     model_desc = "(preserved)" if args.keep_models else target.model
-    print(f"merged history → provider={target.provider} model={model_desc} mode={mode}")
-    print(f"backup → {backup_dir}" if backup_dir is not None else "backup → (not needed)")
-    print(f"rollout files updated → {changed_files}")
-    print(f"rollout lines updated → {changed_lines}")
-    print(f"state rows updated → {state_rows}")
+    verb = "would merge history" if args.dry_run else "merged history"
+    action = "would update" if args.dry_run else "updated"
+    print(f"{verb} → provider={target.provider} model={model_desc} mode={mode}")
+    if result.backup_dir is not None:
+        suffix = " (would create)" if args.dry_run else ""
+        print(f"backup → {result.backup_dir}{suffix}")
+    else:
+        print("backup → (not needed)")
+    print(f"rollout files {action} → {result.changed_files}")
+    print(f"rollout lines {action} → {result.changed_lines}")
+    print(f"state rows {action} → {result.state_rows}")
+    return 0
+
+
+def cmd_doctor_history(_args) -> int:
+    codex = codex_dir()
+    identity = current_identity()
+    profile = normalize_profile_name(active_name())
+    if profile:
+        profile_dir = profile_dir_for_name(profile)
+        session_desc = load_session_config(profile_dir).describe() if profile_dir.is_dir() else "(profile missing)"
+    else:
+        session_desc = "(none)"
+
+    print("history doctor")
+    print(f"current profile → {profile or '(none)'}")
+    print(f"current config → provider={identity.provider or '(empty)'} model={identity.model or '(empty)'}")
+    print(f"session state → {session_desc}")
+
+    state_db = codex / "state_5.sqlite"
+    distribution, dist_error = read_thread_distribution(state_db)
+    print("threads provider/model distribution:")
+    if dist_error:
+        print(f"  ({dist_error})")
+    elif not distribution:
+        print("  (empty)")
+    else:
+        for provider, model, count in distribution:
+            print(f"  {count}  provider={_fmt_value(provider)} model={_fmt_value(model)}")
+
+    recent, recent_error = read_recent_threads(state_db)
+    print("recent threads:")
+    if recent_error:
+        print(f"  ({recent_error})")
+    elif not recent:
+        print("  (empty)")
+    else:
+        for item in recent:
+            bits = [f"rowid={item.pop('rowid')}"]
+            for key, value in item.items():
+                bits.append(f"{key}={_fmt_value(value)}")
+            print("  " + " ".join(bits))
+
+    sqlite_drift = has_provider_model_drift(distribution, identity)
+    if sqlite_drift is None:
+        print("sqlite provider/model drift → unknown")
+    else:
+        print(f"sqlite provider/model drift → {'yes' if sqlite_drift else 'no'}")
+
+    if identity.provider:
+        effective_keep_models = not identity.model
+        plan = plan_merge_history_to_target(codex, identity, effective_keep_models)
+        rollout_drift = plan.changed_files > 0
+        overall_drift = bool(sqlite_drift) or rollout_drift or plan.state_rows > 0
+        print(
+            "planned history alignment → "
+            f"files={plan.changed_files} lines={plan.changed_lines} state_rows={plan.state_rows}"
+        )
+        print(f"rollout metadata drift → {'yes' if rollout_drift else 'no'}")
+        print(f"provider/model drift → {'yes' if overall_drift else 'no'}")
+    else:
+        print("planned history alignment → unknown (empty provider)")
+        print("rollout metadata drift → unknown")
+        print("provider/model drift → unknown")
     return 0
 
 
@@ -779,7 +970,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="only normalize provider identity and keep existing per-thread model values",
     )
+    s.add_argument("--dry-run", action="store_true", help="report planned history changes without writing files")
     s.set_defaults(func=cmd_merge_history)
+
+    s = subs.add_parser("doctor-history", help="read-only diagnostics for Codex history provider/model state")
+    s.set_defaults(func=cmd_doctor_history)
 
     s = subs.add_parser("rm", aliases=["remove"], help="delete profile (active is protected)")
     s.add_argument("name")
