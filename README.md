@@ -1,5 +1,8 @@
 # codex-profile-switcher
 
+[![PyPI](https://img.shields.io/pypi/v/codex-profile-switcher.svg)](https://pypi.org/project/codex-profile-switcher/)
+[![CI](https://github.com/kadaliao/codex-profile-switcher/actions/workflows/ci.yml/badge.svg)](https://github.com/kadaliao/codex-profile-switcher/actions/workflows/ci.yml)
+
 One-key switch between [OpenAI Codex CLI](https://github.com/openai/codex) configurations — official ChatGPT login, third-party relays, multiple API keys, whatever. CLI + optional Alfred workflow.
 
 Each profile owns the *provider* slice of `~/.codex/config.toml` (model, `[model_providers.*]`, auth method) plus its own `auth.json`. Your local state (trusted projects, plugins, marketplaces, MCP servers, TUI prefs) is left untouched on every switch.
@@ -9,7 +12,7 @@ Each profile owns the *provider* slice of `~/.codex/config.toml` (model, `[model
 Requires [`uv`](https://github.com/astral-sh/uv).
 
 ```bash
-uv tool install git+https://github.com/kadaliao/codex-profile-switcher.git
+uv tool install codex-profile-switcher
 ```
 
 This puts `codex-switch` on `$PATH` (default `~/.local/bin/`). Run `uv tool update-shell` once if your shell can't find it.
@@ -19,10 +22,18 @@ Upgrade later with `uv tool upgrade codex-profile-switcher`; uninstall with `uv 
 ### No-install (one-off)
 
 ```bash
-uvx --from git+https://github.com/kadaliao/codex-profile-switcher.git codex-switch ls
+uvx --from codex-profile-switcher codex-switch ls
 ```
 
 `uvx` resolves and caches an ephemeral environment per invocation. Convenient for trying it out, slower for hot paths like Alfred — use `uv tool install` if you want the workflow to feel snappy.
+
+### Development version
+
+Install directly from GitHub when you want the latest commit before it is released to PyPI:
+
+```bash
+uv tool install git+https://github.com/kadaliao/codex-profile-switcher.git
+```
 
 ### Alfred (optional)
 
@@ -103,6 +114,24 @@ Or build the files by hand — see `examples/relay-profile/`.
 | -------------------- | -------------------- | --------------------------------- |
 | `CODEX_PROFILE_ROOT` | `~/.codex/profiles`  | where profiles live               |
 | `CODEX_HOME`         | `~/.codex`           | the codex config dir to write     |
+
+## Releasing
+
+Packages are published on PyPI as [`codex-profile-switcher`](https://pypi.org/project/codex-profile-switcher/).
+
+Automated releases use GitHub Actions and PyPI Trusted Publishing. Configure the PyPI publisher with owner `kadaliao`, repository `codex-profile-switcher`, workflow `release.yml`, and environment `pypi`.
+
+1. Update `version` in `pyproject.toml`.
+2. Run `uv run python -m unittest tests.test_cli` and `uv build`.
+3. Commit the version bump and push `main`.
+4. Create and push a matching tag:
+
+   ```bash
+   git tag vX.Y.Z
+   git push origin vX.Y.Z
+   ```
+
+The `Publish to PyPI` workflow verifies that the tag version matches `pyproject.toml`, runs tests, builds the wheel and sdist, checks the distributions, and publishes them to PyPI. Manual local publishing is still possible with `uvx twine upload dist/*` when needed.
 
 ## License
 
