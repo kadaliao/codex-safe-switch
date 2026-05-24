@@ -3,80 +3,88 @@
 [![PyPI](https://img.shields.io/pypi/v/codex-profile-switcher.svg)](https://pypi.org/project/codex-profile-switcher/)
 [![CI](https://github.com/kadaliao/codex-profile-switcher/actions/workflows/ci.yml/badge.svg)](https://github.com/kadaliao/codex-profile-switcher/actions/workflows/ci.yml)
 
-One-key switch between [OpenAI Codex CLI](https://github.com/openai/codex) configurations — official ChatGPT login, third-party relays, multiple API keys, whatever. CLI + optional Alfred workflow.
+中文 | [English](README.en.md)
 
-Each profile owns the *provider* slice of `~/.codex/config.toml` (model, `[model_providers.*]`, auth method) plus its own `auth.json`. Your local state (trusted projects, plugins, marketplaces, MCP servers, TUI prefs) is left untouched on every switch.
+一键切换 [OpenAI Codex CLI](https://github.com/openai/codex) 的 provider 配置：官方 ChatGPT 登录、第三方 relay、多组 API key，都可以放进 profile 里。提供命令行工具，并可选配 Alfred workflow。
 
-## Install
+每个 profile 只接管 `~/.codex/config.toml` 里的 provider 片段（model、`[model_providers.*]`、认证方式）和自己的 `auth.json`。你的本地状态（trusted projects、plugins、marketplaces、MCP servers、TUI 偏好等）会在切换时保留。
 
-Requires [`uv`](https://github.com/astral-sh/uv).
+## 安装
+
+需要先安装 [`uv`](https://github.com/astral-sh/uv)。
 
 ```bash
 uv tool install codex-profile-switcher
 ```
 
-This puts `codex-switch` on `$PATH` (default `~/.local/bin/`). Run `uv tool update-shell` once if your shell can't find it.
+安装后会把 `codex-switch` 放到 `$PATH`（默认是 `~/.local/bin/`）。如果 shell 找不到命令，运行一次：
 
-Upgrade later with `uv tool upgrade codex-profile-switcher`; uninstall with `uv tool uninstall codex-profile-switcher`.
+```bash
+uv tool update-shell
+```
 
-### No-install (one-off)
+后续升级和卸载：
+
+```bash
+uv tool upgrade codex-profile-switcher
+uv tool uninstall codex-profile-switcher
+```
+
+### 免安装试用
 
 ```bash
 uvx --from codex-profile-switcher codex-switch ls
 ```
 
-`uvx` resolves and caches an ephemeral environment per invocation. Convenient for trying it out, slower for hot paths like Alfred — use `uv tool install` if you want the workflow to feel snappy.
+`uvx` 会为单次调用解析并缓存临时环境，适合快速试用；如果你要频繁使用，尤其是配合 Alfred，建议用 `uv tool install`。
 
-### Development version
+### 安装开发版
 
-Install directly from GitHub when you want the latest commit before it is released to PyPI:
+想在 PyPI 发版前使用 GitHub 最新提交，可以直接安装仓库版本：
 
 ```bash
 uv tool install git+https://github.com/kadaliao/codex-profile-switcher.git
 ```
 
-### Alfred (optional)
+### Alfred（可选）
 
-After `uv tool install`, double-click `alfred/codex-profile-switcher.alfredworkflow`. Trigger with keyword `cx`.
+执行 `uv tool install` 后，双击 `alfred/codex-profile-switcher.alfredworkflow` 导入 Alfred。触发关键词是 `cx`。
 
-The workflow calls `$HOME/.local/bin/codex-switch`; if `uv tool install` put the binary elsewhere (`uv tool dir --bin` to check), edit the two `script` blocks in the workflow's plist accordingly.
+workflow 默认调用 `$HOME/.local/bin/codex-switch`。如果你的 `uv tool install` 把命令装到了别处，可以用 `uv tool dir --bin` 查看路径，然后修改 workflow plist 里的两个 script block。
 
-## CLI
+## 命令
 
 ```text
-codex-switch              # interactive picker (↑/↓, enter to switch, q to cancel)
-codex-switch ls           # list profiles, ★ marks the active one
-codex-switch current      # print the active profile
-codex-switch official     # switch back to official OpenAI ChatGPT login
-codex-switch openai       # alias of `official`
-codex-switch use [name]   # load <name>; omit for the picker
-codex-switch save <name>  # snapshot the current ~/.codex state as <name>
-codex-switch show <name>  # print <name>'s provider.toml + auth.json key names
-codex-switch state <name> # show/set the session-state scope for a profile
+codex-switch              # 交互式选择器（↑/↓，回车切换，q 取消）
+codex-switch ls           # 列出 profiles，★ 表示当前 active
+codex-switch current      # 打印当前 active profile
+codex-switch official     # 切回官方 OpenAI ChatGPT 登录
+codex-switch openai       # `official` 的别名
+codex-switch use [name]   # 加载 <name>；不传 name 时进入选择器
+codex-switch save <name>  # 把当前 ~/.codex 状态保存成 <name>
+codex-switch show <name>  # 打印 <name> 的 provider.toml 和 auth.json key 名
+codex-switch state <name> # 查看/设置 profile 的 session-state 作用域
 codex-switch restart-codex
-                           # terminate Codex app/server processes so config changes take effect
+                           # 终止 Codex app/server 进程，让配置立即生效
 codex-switch merge-history --dry-run
-                           # preview history metadata changes without writing files
+                           # 预览历史 metadata 修复，不写入文件
 codex-switch doctor-history
-                           # inspect current history provider/model state read-only
-codex-switch rm <name>    # delete profile (the active one is protected)
-codex-switch alfred-list  # JSON for Alfred Script Filter
+                           # 只读检查当前历史 provider/model 状态
+codex-switch rm <name>    # 删除 profile（不允许删除 active profile）
+codex-switch alfred-list  # 输出 Alfred Script Filter JSON
 ```
 
-The picker auto-falls back to a numeric menu when stdin/stdout aren't TTYs (pipes, scripts).
+当 stdin/stdout 不是 TTY（管道、脚本等）时，选择器会自动降级成数字菜单。
 
-## First run
+## 首次使用
 
-If `~/.codex/profiles/` has no profiles yet, `codex-switch` automatically imports the current
-`~/.codex/{config.toml,auth.json}` provider state the first time you run `codex-switch`,
-`codex-switch ls`, or the Alfred workflow.
+如果 `~/.codex/profiles/` 里还没有 profile，第一次运行 `codex-switch`、`codex-switch ls` 或 Alfred workflow 时，工具会自动导入当前 `~/.codex/{config.toml,auth.json}` 的 provider 状态。
 
-- Official ChatGPT login is imported as the hidden `official` profile.
-- Relay/API-key configs are imported as a regular profile named from `model_provider` (for example `relay`).
-- If Codex has not been configured yet, the CLI explains that you need to configure Codex once or run
-  `codex-switch save <name>` after setting up the provider manually.
+- 官方 ChatGPT 登录会导入成隐藏的 `official` profile。
+- relay/API-key 配置会导入成普通 profile，名字来自 `model_provider`，例如 `relay`。
+- 如果 Codex 还没有配置过，CLI 会提示你先正常配置一次 Codex，或者在手动配置 provider 后运行 `codex-switch save <name>`。
 
-When you need the Codex desktop app or app server to pick up a switch immediately, use:
+如果需要让 Codex 桌面 app 或 app server 立刻读到新配置，可以使用：
 
 ```bash
 codex-switch use <name> --restart-codex
@@ -84,77 +92,83 @@ codex-switch official --restart-codex
 codex-switch restart-codex
 ```
 
-The restart command terminates matching Codex app/server processes while avoiding `codex-switch` itself.
+`restart-codex` 会终止匹配到的 Codex app/server 进程，并避开 `codex-switch` 自己。
 
-## Official OpenAI shortcut
+## 官方 OpenAI 快捷入口
 
-`codex-switch official` is the one-step way back to the official OpenAI ChatGPT login.
+`codex-switch official` 可以一键切回官方 OpenAI ChatGPT 登录。
 
-- The tool keeps a hidden `~/.codex/profiles/.official/` snapshot for the official config/auth.
-- The first time you switch away from an official OpenAI session, that snapshot is refreshed automatically.
-- `codex-switch openai` is an alias if you prefer typing the provider name directly.
+- 工具会维护隐藏快照：`~/.codex/profiles/.official/`。
+- 第一次从官方登录切换到其他 profile 时，会自动刷新这个官方快照。
+- 如果你更喜欢按 provider 名称输入，也可以用 `codex-switch openai`。
 
-## Shared history by default
+## 默认共享历史
 
-After every `use` / `official` switch, `codex-switch` automatically aligns local Codex history metadata to the active provider and model identity.
+每次执行 `use` / `official` 后，`codex-switch` 都会自动把本地 Codex 历史 metadata 对齐到当前 provider 和 model identity。
 
-- You no longer need to remember `merge-history` during normal profile switching.
-- This keeps session history visible when moving between relay profiles and the official OpenAI login, including surfaces that filter by model id.
-- `merge-history --keep-models` still exists if you want a provider-only repair and need to preserve historical per-thread model ids.
-- `merge-history --dry-run` reports rollout files/lines, SQLite rows, and the backup path it would create without writing anything.
-- `doctor-history` is read-only and summarizes the active profile, current provider/model, session-state mode, SQLite `threads` distribution, recent threads, planned alignment counts, and provider/model drift.
+- 正常切换 profile 时不需要再手动记 `merge-history`。
+- 在 relay profile 和官方 OpenAI 登录之间切换时，历史会继续可见，包括会按 model id 过滤的界面。
+- 如果你只想修复 provider，不想覆盖历史里的 model 值，可以继续用 `merge-history --keep-models`。
+- `merge-history --dry-run` 会报告将要更新的 rollout 文件数、行数、SQLite rows，以及会创建的备份路径，但不会写入文件。
+- `doctor-history` 是只读诊断命令，会汇总 active profile、当前 provider/model、session-state 模式、SQLite `threads` 分布、最近线程、计划对齐数量和漂移状态。
 
-## Profile format
+## Profile 格式
 
 ```text
 ~/.codex/profiles/
-├── .active                       # plaintext: name of the active profile
-├── chatgpt-official/
-│   ├── auth.json                 # full file copied into ~/.codex/auth.json
-│   └── provider.toml             # empty = use ChatGPT login
+├── .active                       # 明文：当前 active profile 名
+├── .official/
+│   ├── auth.json                 # 切换时完整复制到 ~/.codex/auth.json
+│   └── provider.toml             # 官方登录的 provider 片段
 └── myrelay/
     ├── auth.json                 # {"OPENAI_API_KEY": "sk-..."}
-    └── provider.toml             # only provider-related keys (see examples/)
+    └── provider.toml             # 只包含 provider 相关字段（见 examples/）
 ```
 
-The following top-level keys + tables are owned by a profile (swapped on `use`); everything else in `~/.codex/config.toml` is preserved:
+profile 会接管下列顶层 key 和 table；`~/.codex/config.toml` 中其他内容会保留：
 
 - `model`, `model_provider`, `model_reasoning_effort`, `model_reasoning_summary`, `model_verbosity`
 - `wire_api`, `disable_response_storage`, `preferred_auth_method`
 - `[model_providers.*]`
 
-## Adding a relay profile
+## 添加 relay profile
 
-1. Configure the relay normally in `~/.codex/{config.toml,auth.json}` and verify `codex` works.
-2. `codex-switch save <name>` — snapshots the provider slice + auth.json into a new profile.
-3. `cx` in Alfred (or `codex-switch use <name>`) to switch anytime.
+1. 先按正常方式在 `~/.codex/{config.toml,auth.json}` 里配置 relay，并确认 `codex` 可以工作。
+2. 运行 `codex-switch save <name>`，把 provider 片段和 auth.json 保存成新 profile。
+3. 后续用 Alfred 的 `cx` 或 `codex-switch use <name>` 随时切换。
 
-Or build the files by hand — see `examples/relay-profile/`.
+也可以手写 profile 文件，参考 `examples/relay-profile/`。
 
-## Env overrides
+## 环境变量
 
-| Var                  | Default              | Purpose                           |
-| -------------------- | -------------------- | --------------------------------- |
-| `CODEX_PROFILE_ROOT` | `~/.codex/profiles`  | where profiles live               |
-| `CODEX_HOME`         | `~/.codex`           | the codex config dir to write     |
+| 变量                 | 默认值             | 用途                       |
+| -------------------- | ------------------ | -------------------------- |
+| `CODEX_PROFILE_ROOT` | `~/.codex/profiles` | profiles 存放位置          |
+| `CODEX_HOME`         | `~/.codex`          | 要写入的 Codex 配置目录    |
 
-## Releasing
+## 发布
 
-Packages are published on PyPI as [`codex-profile-switcher`](https://pypi.org/project/codex-profile-switcher/).
+PyPI 包发布在 [`codex-profile-switcher`](https://pypi.org/project/codex-profile-switcher/)。
 
-Automated releases use GitHub Actions with the `PYPI_API_TOKEN` repository secret.
+当前 GitHub Actions 触发规则：
 
-1. Update `version` in `pyproject.toml`.
-2. Run `uv run python -m unittest tests.test_cli` and `uv build`.
-3. Commit the version bump and push `main`.
-4. Create and push a matching tag:
+- push 到 `main` 或提交 PR：运行 CI，包含 Python 单测、`uv build`、`twine check`。
+- 推送 `v*` tag：运行 `Publish to PyPI` workflow，校验 tag 版本和 `pyproject.toml` 版本一致后，构建并发布到 PyPI。
+- Alfred workflow：目前没有 GitHub Actions 自动构建；仓库里提交的是现成的 `alfred/codex-profile-switcher.alfredworkflow`。
+
+发版步骤：
+
+1. 更新 `pyproject.toml` 里的 `version`。
+2. 运行 `uv run python -m unittest tests.test_cli` 和 `uv build`。
+3. 提交版本变更并推送 `main`。
+4. 创建并推送匹配的 tag：
 
    ```bash
    git tag vX.Y.Z
    git push origin vX.Y.Z
    ```
 
-The `Publish to PyPI` workflow verifies that the tag version matches `pyproject.toml`, runs tests, builds the wheel and sdist, checks the distributions, and publishes them to PyPI. Manual local publishing is still possible with `uvx twine upload dist/*` when needed.
+`Publish to PyPI` workflow 会验证 tag 版本、运行测试、构建 wheel/sdist、检查分发包并发布到 PyPI。需要手动发布时，也可以使用 `uvx twine upload dist/*`。
 
 ## License
 
