@@ -77,6 +77,84 @@ class CodexSwitchCliTests(unittest.TestCase):
         )
         write_json(self.codex_home / "auth.json", {"auth_mode": "chatgpt", "token": "official"})
 
+    def set_current_relay(self) -> None:
+        (self.codex_home / "config.toml").write_text(
+            '\n'.join([
+                'model = "gpt-5.5"',
+                'model_provider = "relay"',
+                'preferred_auth_method = "apikey"',
+                '',
+                '[model_providers.relay]',
+                'name = "relay"',
+                'base_url = "https://relay.example/openai"',
+                'wire_api = "responses"',
+                'env_key = "RELAY_KEY"',
+                '',
+            ])
+        )
+        write_json(self.codex_home / "auth.json", {"auth_mode": "apikey", "OPENAI_API_KEY": "relay"})
+
+    def test_first_run_ls_imports_existing_relay_config(self) -> None:
+        self.set_current_relay()
+
+        _code, output = self.run_cli_output("ls")
+
+        self.assertIn("initialized profile from existing Codex config → relay", output)
+        self.assertIn("★ relay", output)
+        self.assertEqual((self.profile_root / ".active").read_text().strip(), "relay")
+        self.assertTrue((self.profile_root / "relay" / "auth.json").is_file())
+        provider = (self.profile_root / "relay" / "provider.toml").read_text()
+        self.assertIn('model_provider = "relay"', provider)
+
+    def test_first_run_ls_imports_existing_official_config(self) -> None:
+        self.set_current_official()
+
+        _code, output = self.run_cli_output("ls")
+
+        self.assertIn("initialized profile from existing Codex config → official", output)
+        self.assertIn("★ official", output)
+        self.assertEqual((self.profile_root / ".active").read_text().strip(), "official")
+        self.assertTrue((self.profile_root / ".official" / "auth.json").is_file())
+
+    def test_alfred_list_offers_initialize_action_when_profiles_and_config_are_missing(self) -> None:
+        _code, output = self.run_cli_output("alfred-list")
+
+        payload = json.loads(output)
+        self.assertEqual(payload["items"][0]["title"], "Initialize Codex profiles")
+        self.assertEqual(payload["items"][0]["arg"], "__init__")
+        self.assertIn("Run codex-switch save", payload["items"][0]["subtitle"])
+
+    def test_restart_codex_kills_only_matching_codex_processes(self) -> None:
+        ps_output = "\n".join([
+            "101 /Applications/Codex.app/Contents/MacOS/Codex",
+            "102 /usr/local/bin/codex app-server",
+            "103 /Users/me/.local/bin/codex-switch restart-codex",
+            "104 /usr/bin/python other.py",
+            "",
+        ])
+
+        with patch("codex_profile_switcher.cli._ps_output", return_value=ps_output), patch(
+            "codex_profile_switcher.cli._pid_exists", return_value=False
+        ), patch("codex_profile_switcher.cli.os.kill") as kill:
+            _code, output = self.run_cli_output("restart-codex")
+
+        self.assertIn("restarted Codex processes → 2", output)
+        self.assertEqual([call.args[0] for call in kill.call_args_list], [101, 102])
+
+    def test_use_restart_codex_restarts_after_switch(self) -> None:
+        self.set_current_official()
+        relay_dir = self.profile_root / "relay"
+        relay_dir.mkdir()
+        write_json(relay_dir / "auth.json", {"auth_mode": "apikey", "OPENAI_API_KEY": "relay"})
+        (relay_dir / "provider.toml").write_text('model_provider = "relay"\n')
+
+        with patch("codex_profile_switcher.cli.restart_codex_processes", return_value=3) as restart:
+            _code, output = self.run_cli_output("use", "relay", "--restart-codex")
+
+        self.assertIn("switched → relay", output)
+        self.assertIn("restarted Codex processes → 3", output)
+        restart.assert_called_once()
+
     def test_use_openai_alias_restores_official_snapshot_and_merges_history(self) -> None:
         self.set_current_official()
         self.snapshot_official()

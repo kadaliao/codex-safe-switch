@@ -53,6 +53,8 @@ codex-switch use [name]   # load <name>; omit for the picker
 codex-switch save <name>  # snapshot the current ~/.codex state as <name>
 codex-switch show <name>  # print <name>'s provider.toml + auth.json key names
 codex-switch state <name> # show/set the session-state scope for a profile
+codex-switch restart-codex
+                           # terminate Codex app/server processes so config changes take effect
 codex-switch merge-history --dry-run
                            # preview history metadata changes without writing files
 codex-switch doctor-history
@@ -62,6 +64,27 @@ codex-switch alfred-list  # JSON for Alfred Script Filter
 ```
 
 The picker auto-falls back to a numeric menu when stdin/stdout aren't TTYs (pipes, scripts).
+
+## First run
+
+If `~/.codex/profiles/` has no profiles yet, `codex-switch` automatically imports the current
+`~/.codex/{config.toml,auth.json}` provider state the first time you run `codex-switch`,
+`codex-switch ls`, or the Alfred workflow.
+
+- Official ChatGPT login is imported as the hidden `official` profile.
+- Relay/API-key configs are imported as a regular profile named from `model_provider` (for example `relay`).
+- If Codex has not been configured yet, the CLI explains that you need to configure Codex once or run
+  `codex-switch save <name>` after setting up the provider manually.
+
+When you need the Codex desktop app or app server to pick up a switch immediately, use:
+
+```bash
+codex-switch use <name> --restart-codex
+codex-switch official --restart-codex
+codex-switch restart-codex
+```
+
+The restart command terminates matching Codex app/server processes while avoiding `codex-switch` itself.
 
 ## Official OpenAI shortcut
 

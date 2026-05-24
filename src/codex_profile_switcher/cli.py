@@ -18,11 +18,14 @@ from dataclasses import dataclass
 from datetime import datetime
 import json
 import os
+import signal
 import shutil
 import stat
 import sqlite3
+import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -43,6 +46,7 @@ SESSION_STATE_FILES = (
 OFFICIAL_PROFILE_NAME = "official"
 OFFICIAL_PROFILE_DIRNAME = ".official"
 OFFICIAL_ALIASES = {OFFICIAL_PROFILE_NAME, "openai"}
+ALFRED_INIT_ARG = "__init__"
 
 
 @dataclass(frozen=True)
@@ -137,9 +141,133 @@ def list_profiles() -> list[str]:
     return names
 
 
+def _safe_profile_name(raw: Optional[str]) -> str:
+    name = (raw or "current").strip().lower()
+    chars = [ch if ch.isalnum() or ch in {"-", "_", "."} else "-" for ch in name]
+    safe = "".join(chars).strip(".-_") or "current"
+    if normalize_profile_name(safe) == OFFICIAL_PROFILE_NAME:
+        return "openai-api"
+    return safe
+
+
+def bootstrap_current_profile(*, verbose: bool = True) -> Optional[str]:
+    """Import the current Codex config on first run, if no profiles exist yet."""
+    if list_profiles():
+        return None
+
+    codex = codex_dir()
+    auth = codex / "auth.json"
+    cfg = codex / "config.toml"
+    if not auth.is_file():
+        return None
+
+    if current_looks_official(codex):
+        snapshot_official_state(codex)
+        name = OFFICIAL_PROFILE_NAME
+    else:
+        identity = current_identity()
+        name = _safe_profile_name(identity.provider)
+        dir_ = profile_root() / name
+        dir_.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(auth, dir_ / "auth.json")
+        if cfg.is_file():
+            _swap.extract(cfg, dir_ / "provider.toml")
+        else:
+            (dir_ / "provider.toml").write_text("")
+        write_session_config(dir_, SessionConfig())
+
+    active_file().parent.mkdir(parents=True, exist_ok=True)
+    active_file().write_text(name + "\n")
+    if verbose:
+        print(f"initialized profile from existing Codex config → {name}")
+    return name
+
+
+def no_profiles_message() -> str:
+    return (
+        "no profiles yet — configure Codex once, then run `codex-switch` to import it, "
+        "or create one with `codex-switch save <name>`"
+    )
+
+
 def _die(msg: str) -> "NoReturn":  # type: ignore[name-defined]
     print(f"codex-switch: {msg}", file=sys.stderr)
     raise SystemExit(1)
+
+
+def _ps_output() -> str:
+    result = subprocess.run(
+        ["ps", "-axo", "pid=,args="],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    return result.stdout
+
+
+def _pid_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _looks_like_codex_process(pid: int, args: str) -> bool:
+    if pid == os.getpid():
+        return False
+    lower = args.lower()
+    if "codex-switch" in lower or "codex_profile_switcher" in lower:
+        return False
+    executable = Path(args.split(maxsplit=1)[0]).name.lower() if args.strip() else ""
+    if executable in {"codex", "codex-app-server", "codex-server"}:
+        return True
+    return (
+        "/codex.app/contents/" in lower
+        or " codex app-server" in lower
+        or " codex-app-server" in lower
+        or " codex server" in lower
+    )
+
+
+def find_codex_processes() -> list[int]:
+    pids: list[int] = []
+    for line in _ps_output().splitlines():
+        parts = line.strip().split(maxsplit=1)
+        if len(parts) != 2:
+            continue
+        try:
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        if _looks_like_codex_process(pid, parts[1]):
+            pids.append(pid)
+    return pids
+
+
+def restart_codex_processes() -> int:
+    pids = find_codex_processes()
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+
+    deadline = time.monotonic() + 1.5
+    while time.monotonic() < deadline and any(_pid_exists(pid) for pid in pids):
+        time.sleep(0.05)
+
+    for pid in pids:
+        if not _pid_exists(pid):
+            continue
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    return len(pids)
 
 
 def _atomic_write_copy(src: Path, dst: Path) -> None:
@@ -600,11 +728,14 @@ def ensure_official_snapshot_available(codex: Path) -> None:
     _die("official OpenAI snapshot not found; switch to official once, then run `codex-switch official`")
 
 
-def switch_to_profile(name: str) -> int:
+def switch_to_profile(name: str, *, restart_codex: bool = False) -> int:
     normalized_name = normalize_profile_name(name)
     dir_ = profile_dir_for_name(normalized_name)
     if not dir_.is_dir():
-        _die(f"profile not found: {name}")
+        bootstrap_current_profile()
+        dir_ = profile_dir_for_name(normalized_name)
+        if not dir_.is_dir():
+            _die(f"profile not found: {name}")
     auth_src = dir_ / "auth.json"
     prov_src = dir_ / "provider.toml"
     if not auth_src.is_file():
@@ -641,6 +772,9 @@ def switch_to_profile(name: str) -> int:
     active_file().write_text(normalized_name + "\n")
     print(f"switched → {normalized_name}")
     maybe_auto_merge_history(codex)
+    if restart_codex:
+        count = restart_codex_processes()
+        print(f"restarted Codex processes → {count}")
     return 0
 
 
@@ -741,14 +875,19 @@ def cmd_doctor_history(_args) -> int:
 
 
 def cmd_ls(_args) -> int:
+    bootstrap_current_profile()
     active = normalize_profile_name(active_name())
-    for name in list_profiles():
+    profiles = list_profiles()
+    if not profiles:
+        _die(no_profiles_message())
+    for name in profiles:
         prefix = "★" if name == active else " "
         print(f"{prefix} {name}")
     return 0
 
 
 def cmd_current(_args) -> int:
+    bootstrap_current_profile()
     name = normalize_profile_name(active_name())
     if name:
         print(name)
@@ -759,10 +898,16 @@ def cmd_current(_args) -> int:
 
 def cmd_use(args) -> int:
     name = normalize_profile_name(args.name)
+    if args.name == ALFRED_INIT_ARG:
+        initialized = bootstrap_current_profile()
+        if initialized is None:
+            _die(no_profiles_message())
+        return 0
     if not name:
+        bootstrap_current_profile()
         profiles = list_profiles()
         if not profiles:
-            _die("no profiles yet — create one with `codex-switch save <name>`")
+            _die(no_profiles_message())
         chosen = pick(profiles, active=normalize_profile_name(active_name()), prompt="Switch to which profile?")
         if chosen is None:
             print("cancelled")
@@ -770,13 +915,13 @@ def cmd_use(args) -> int:
         name = normalize_profile_name(chosen)
     if name == OFFICIAL_PROFILE_NAME:
         return cmd_official(args)
-    return switch_to_profile(name)
+    return switch_to_profile(name, restart_codex=getattr(args, "restart_codex", False))
 
 
-def cmd_official(_args) -> int:
+def cmd_official(args) -> int:
     codex = codex_dir()
     ensure_official_snapshot_available(codex)
-    return switch_to_profile(OFFICIAL_PROFILE_NAME)
+    return switch_to_profile(OFFICIAL_PROFILE_NAME, restart_codex=getattr(args, "restart_codex", False))
 
 
 def cmd_save(args) -> int:
@@ -890,6 +1035,7 @@ def cmd_state(args) -> int:
 
 def cmd_alfred_list(_args) -> int:
     """Emit Alfred Script Filter JSON."""
+    bootstrap_current_profile(verbose=False)
     active = normalize_profile_name(active_name())
     items = []
     for name in list_profiles():
@@ -909,21 +1055,36 @@ def cmd_alfred_list(_args) -> int:
                 "subtitle": f"switch to {name}",
                 "autocomplete": name,
             })
+    if not items:
+        items.append({
+            "uid": "initialize",
+            "title": "Initialize Codex profiles",
+            "arg": ALFRED_INIT_ARG,
+            "subtitle": "Run codex-switch save <name> after configuring Codex once",
+            "autocomplete": "initialize",
+        })
     print(json.dumps({"items": items}, ensure_ascii=False))
     return 0
 
 
 def cmd_pick(_args) -> int:
     """Default action when no subcommand is given: interactive switch."""
+    bootstrap_current_profile()
     profiles = list_profiles()
     if not profiles:
-        _die("no profiles yet — create one with `codex-switch save <name>`")
+        _die(no_profiles_message())
     chosen = pick(profiles, active=normalize_profile_name(active_name()), prompt="Switch to which profile?")
     if chosen is None:
         print("cancelled")
         return 1
-    args_ns = argparse.Namespace(name=chosen)
+    args_ns = argparse.Namespace(name=chosen, restart_codex=False)
     return cmd_use(args_ns)
+
+
+def cmd_restart_codex(_args) -> int:
+    count = restart_codex_processes()
+    print(f"restarted Codex processes → {count}")
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -940,10 +1101,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_current)
 
     s = subs.add_parser("official", aliases=["openai"], help="switch back to official OpenAI ChatGPT login")
+    s.add_argument("--restart-codex", action="store_true", help="terminate Codex app/server processes after switching")
     s.set_defaults(func=cmd_official)
 
     s = subs.add_parser("use", aliases=["switch"], help="load <name> (interactive if omitted)")
     s.add_argument("name", nargs="?")
+    s.add_argument("--restart-codex", action="store_true", help="terminate Codex app/server processes after switching")
     s.set_defaults(func=cmd_use)
 
     s = subs.add_parser("save", help="snapshot the current ~/.codex state as <name>")
@@ -975,6 +1138,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = subs.add_parser("doctor-history", help="read-only diagnostics for Codex history provider/model state")
     s.set_defaults(func=cmd_doctor_history)
+
+    s = subs.add_parser("restart-codex", help="terminate Codex app/server processes so config changes take effect")
+    s.set_defaults(func=cmd_restart_codex)
 
     s = subs.add_parser("rm", aliases=["remove"], help="delete profile (active is protected)")
     s.add_argument("name")
