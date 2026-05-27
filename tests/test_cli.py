@@ -117,6 +117,32 @@ class CodexSwitchCliTests(unittest.TestCase):
         provider = (self.profile_root / "relay" / "provider.toml").read_text()
         self.assertIn('model_provider = "relay"', provider)
 
+    def test_save_env_key_profile_does_not_store_chatgpt_tokens(self) -> None:
+        self.set_current_official()
+        (self.codex_home / "config.toml").write_text(
+            '\n'.join([
+                'model = "gpt-5.5"',
+                'model_provider = "relay"',
+                'preferred_auth_method = "apikey"',
+                '',
+                '[model_providers.relay]',
+                'name = "relay"',
+                'base_url = "https://relay.example/openai"',
+                'wire_api = "responses"',
+                'requires_openai_auth = false',
+                'env_key = "RELAY_KEY"',
+                '',
+            ])
+        )
+
+        _code, output = self.run_cli_output("save", "relay")
+
+        self.assertIn("saved → relay", output)
+        self.assertFalse((self.profile_root / "relay" / "auth.json").exists())
+        provider = (self.profile_root / "relay" / "provider.toml").read_text()
+        self.assertIn('requires_openai_auth = false', provider)
+        self.assertIn('env_key = "RELAY_KEY"', provider)
+
     def test_first_run_ls_imports_existing_official_config(self) -> None:
         self.set_current_official()
 
@@ -165,6 +191,69 @@ class CodexSwitchCliTests(unittest.TestCase):
         self.assertIn("switched → relay", output)
         self.assertIn("restarted Codex processes → 3", output)
         restart.assert_called_once()
+
+    def test_use_env_key_profile_without_auth_preserves_existing_chatgpt_login(self) -> None:
+        self.set_current_official()
+        relay_dir = self.profile_root / "relay"
+        relay_dir.mkdir()
+        (relay_dir / "provider.toml").write_text(
+            '\n'.join([
+                'model = "gpt-5.5"',
+                'model_provider = "relay"',
+                'preferred_auth_method = "apikey"',
+                '',
+                '[model_providers.relay]',
+                'name = "relay"',
+                'base_url = "https://relay.example/openai"',
+                'wire_api = "responses"',
+                'requires_openai_auth = false',
+                'env_key = "RELAY_KEY"',
+                '',
+            ])
+        )
+
+        _code, output = self.run_cli_output("use", "relay")
+
+        self.assertIn("switched → relay", output)
+        config = self.read_config()
+        self.assertIn('model_provider = "relay"', config)
+        self.assertIn('requires_openai_auth = false', config)
+        self.assertIn('env_key = "RELAY_KEY"', config)
+        self.assertEqual(
+            json.loads((self.codex_home / "auth.json").read_text()),
+            {"auth_mode": "chatgpt", "token": "official"},
+        )
+
+    def test_use_env_key_profile_ignores_stale_profile_chatgpt_tokens(self) -> None:
+        self.set_current_official()
+        relay_dir = self.profile_root / "relay"
+        relay_dir.mkdir()
+        write_json(
+            relay_dir / "auth.json",
+            {"auth_mode": "chatgpt", "tokens": {"refresh_token": "stale"}},
+        )
+        (relay_dir / "provider.toml").write_text(
+            '\n'.join([
+                'model = "gpt-5.5"',
+                'model_provider = "relay"',
+                'preferred_auth_method = "apikey"',
+                '',
+                '[model_providers.relay]',
+                'name = "relay"',
+                'base_url = "https://relay.example/openai"',
+                'wire_api = "responses"',
+                'requires_openai_auth = false',
+                'env_key = "RELAY_KEY"',
+                '',
+            ])
+        )
+
+        self.run_cli("use", "relay")
+
+        self.assertEqual(
+            json.loads((self.codex_home / "auth.json").read_text()),
+            {"auth_mode": "chatgpt", "token": "official"},
+        )
 
     def test_ctrl_c_exits_cleanly_without_traceback(self) -> None:
         with patch("codex_profile_switcher.cli.cmd_pick", side_effect=KeyboardInterrupt):

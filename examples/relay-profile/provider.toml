@@ -8,4 +8,5 @@ preferred_auth_method = "apikey"
 name = "myrelay"
 base_url = "https://your-relay.example.com/openai"
 wire_api = "responses"
-requires_openai_auth = true
+requires_openai_auth = false
+env_key = "MYRELAY_OPENAI_API_KEY"

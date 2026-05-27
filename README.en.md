@@ -7,7 +7,7 @@
 
 One-key switch between [OpenAI Codex CLI](https://github.com/openai/codex) configurations — official ChatGPT login, third-party relays, multiple API keys, whatever. CLI + optional Alfred workflow.
 
-Each profile owns the *provider* slice of `~/.codex/config.toml` (model, `[model_providers.*]`, auth method) plus its own `auth.json`. Your local state (trusted projects, plugins, marketplaces, MCP servers, TUI prefs) is left untouched on every switch.
+Each profile owns the *provider* slice of `~/.codex/config.toml` (model, `[model_providers.*]`, auth method). A profile stores `auth.json` only when it really owns an auth file; relays that use `env_key` can rely on environment variables and leave the official ChatGPT login cache in place. Your local state (trusted projects, plugins, marketplaces, MCP servers, TUI prefs) is left untouched on every switch.
 
 ## Install
 
@@ -70,8 +70,8 @@ The picker auto-falls back to a numeric menu when stdin/stdout aren't TTYs (pipe
 ## First run
 
 If `~/.codex/profiles/` has no profiles yet, `codex-switch` automatically imports the current
-`~/.codex/{config.toml,auth.json}` provider state the first time you run `codex-switch`,
-`codex-switch ls`, or the Alfred workflow.
+`~/.codex/config.toml` provider state the first time you run `codex-switch`, `codex-switch ls`,
+or the Alfred workflow, and stores `auth.json` only when that profile owns its own auth.
 
 - Official ChatGPT login is imported as the hidden `official` profile.
 - Relay/API-key configs are imported as a regular profile named from `model_provider` (for example `relay`).
@@ -115,7 +115,7 @@ After every `use` / `official` switch, `codex-switch` automatically aligns local
 │   ├── auth.json                 # full file copied into ~/.codex/auth.json
 │   └── provider.toml             # empty = use ChatGPT login
 └── myrelay/
-    ├── auth.json                 # {"OPENAI_API_KEY": "sk-..."}
+    ├── auth.json                 # optional; only needed when the profile owns a key/token
     └── provider.toml             # only provider-related keys (see examples/)
 ```
 
@@ -127,9 +127,10 @@ The following top-level keys + tables are owned by a profile (swapped on `use`);
 
 ## Adding a relay profile
 
-1. Configure the relay normally in `~/.codex/{config.toml,auth.json}` and verify `codex` works.
-2. `codex-switch save <name>` — snapshots the provider slice + auth.json into a new profile.
-3. `cx` in Alfred (or `codex-switch use <name>`) to switch anytime.
+1. Configure the relay normally in `~/.codex/config.toml` and verify `codex` works.
+2. For a relay whose key comes from the environment, prefer `requires_openai_auth = false` plus `env_key = "..."`. That profile does not need `auth.json`; switching to it preserves the current official ChatGPT login cache so Codex remote connections can keep using the same ChatGPT account.
+3. `codex-switch save <name>` — snapshots the provider slice into a new profile. It only stores `auth.json` when the provider explicitly needs OpenAI/ChatGPT auth, or for legacy API-key configs that do not declare `requires_openai_auth = false`.
+4. `cx` in Alfred (or `codex-switch use <name>`) to switch anytime.
 
 Or build the files by hand — see `examples/relay-profile/`.
 

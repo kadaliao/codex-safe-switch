@@ -6,7 +6,7 @@ Storage layout:
       ├── .active                   # name of the currently-loaded profile
       ├── .official/                # reserved snapshot for official OpenAI login
       └── <name>/
-            ├── auth.json           # copied to ~/.codex/auth.json
+            ├── auth.json           # optional; copied only when the profile owns auth
             ├── provider.toml       # merged into ~/.codex/config.toml
             └── session.toml        # optional session-state scope metadata
 """
@@ -127,6 +127,26 @@ def current_identity() -> IdentityConfig:
     return IdentityConfig(provider=provider or None, model=model or None)
 
 
+def profile_requires_auth_file(profile_dir: Path, provider_doc=None) -> bool:
+    """Return true when switching this profile should replace ~/.codex/auth.json."""
+    if normalize_profile_name(profile_dir.name) == OFFICIAL_PROFILE_NAME:
+        return True
+    doc = provider_doc if provider_doc is not None else _swap.load(profile_dir / "provider.toml")
+    preferred_auth_method = str(doc.get("preferred_auth_method") or "").strip()
+    if preferred_auth_method == "chatgpt":
+        return True
+    provider = str(doc.get("model_provider") or "").strip()
+    providers = doc.get("model_providers")
+    if provider and providers is not None and provider in providers:
+        provider_cfg = providers[provider]
+        requires = provider_cfg.get("requires_openai_auth")
+        if requires is not None:
+            return bool(requires)
+    if preferred_auth_method == "apikey":
+        return True
+    return not provider
+
+
 def list_profiles() -> list[str]:
     root = profile_root()
     if not root.exists():
@@ -169,11 +189,12 @@ def bootstrap_current_profile(*, verbose: bool = True) -> Optional[str]:
         name = _safe_profile_name(identity.provider)
         dir_ = profile_root() / name
         dir_.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(auth, dir_ / "auth.json")
         if cfg.is_file():
             _swap.extract(cfg, dir_ / "provider.toml")
         else:
             (dir_ / "provider.toml").write_text("")
+        if profile_requires_auth_file(dir_):
+            shutil.copy2(auth, dir_ / "auth.json")
         write_session_config(dir_, SessionConfig())
 
     active_file().parent.mkdir(parents=True, exist_ok=True)
@@ -738,10 +759,12 @@ def switch_to_profile(name: str, *, restart_codex: bool = False) -> int:
             _die(f"profile not found: {name}")
     auth_src = dir_ / "auth.json"
     prov_src = dir_ / "provider.toml"
-    if not auth_src.is_file():
-        _die(f"missing {auth_src}")
     if not prov_src.is_file():
         _die(f"missing {prov_src}")
+    provider_doc = _swap.load(prov_src)
+    needs_auth_file = profile_requires_auth_file(dir_, provider_doc)
+    if needs_auth_file and not auth_src.is_file():
+        _die(f"missing {auth_src}")
 
     codex = codex_dir()
     codex.mkdir(parents=True, exist_ok=True)
@@ -766,7 +789,8 @@ def switch_to_profile(name: str, *, restart_codex: bool = False) -> int:
         if tmp_cfg.exists():
             tmp_cfg.unlink(missing_ok=True)
 
-    _atomic_write_copy(auth_src, auth)
+    if needs_auth_file:
+        _atomic_write_copy(auth_src, auth)
     maybe_switch_session_state(current, normalized_name, codex)
 
     active_file().write_text(normalized_name + "\n")
@@ -936,13 +960,16 @@ def cmd_save(args) -> int:
     codex = codex_dir()
     auth = codex / "auth.json"
     cfg = codex / "config.toml"
-    if not auth.is_file():
-        _die(f"no {auth} to snapshot")
-    shutil.copy2(auth, dir_ / "auth.json")
     if cfg.is_file():
         _swap.extract(cfg, dir_ / "provider.toml")
     else:
         (dir_ / "provider.toml").write_text("")
+    if profile_requires_auth_file(dir_):
+        if not auth.is_file():
+            _die(f"no {auth} to snapshot")
+        shutil.copy2(auth, dir_ / "auth.json")
+    else:
+        (dir_ / "auth.json").unlink(missing_ok=True)
 
     if args.shared:
         session_cfg = SessionConfig()
