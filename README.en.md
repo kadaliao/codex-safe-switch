@@ -102,6 +102,7 @@ After every `use` / `official` switch, `codex-switch` automatically aligns local
 
 - You no longer need to remember `merge-history` during normal profile switching.
 - This keeps session history visible when moving between relay profiles and the official OpenAI login, including surfaces that filter by model id.
+- If `session_index.jsonl` has fallen behind the latest threads in SQLite, the switch appends repaired index entries from `state_5.sqlite` so mobile history lists do not stay pinned to an older point in time.
 - If this host has used Codex remote-control before, the switch also checks the managed app-server path that desktop/mobile remote access depends on. It retries through the managed daemon when an old unmanaged unix app-server owns the socket, and prints the official standalone install command when that managed install is missing.
 - `merge-history --keep-models` still exists if you want a provider-only repair and need to preserve historical per-thread model ids.
 - `merge-history --dry-run` reports rollout files/lines, SQLite rows, and the backup path it would create without writing anything.

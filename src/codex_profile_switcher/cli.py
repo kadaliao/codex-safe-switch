@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import os
 import signal
@@ -49,6 +49,12 @@ OFFICIAL_ALIASES = {OFFICIAL_PROFILE_NAME, "openai"}
 ALFRED_INIT_ARG = "__init__"
 REMOTE_CONTROL_INSTALL_COMMAND = "curl -fsSL https://chatgpt.com/codex/install.sh | sh"
 REMOTE_CONTROL_REPAIR_ENV = "CODEX_SWITCH_REMOTE_REPAIR"
+GLOBAL_STATE_FILES = (".codex-global-state.json", ".codex-global-state.json.bak")
+REMOTE_HOST_PREFIX = "remote-ssh-"
+ELECTRON_REMOTE_STATE_KEYS = (
+    "electron-local-remote-control-environment-id",
+    "electron-local-remote-control-installation-id",
+)
 
 
 @dataclass(frozen=True)
@@ -435,9 +441,91 @@ def _remote_control_is_unmanaged(text: str) -> bool:
     )
 
 
+def _remote_control_pending_description(result: subprocess.CompletedProcess[str]) -> Optional[str]:
+    if result.returncode != 0:
+        return None
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    status = str(data.get("status") or "").strip()
+    timed_out = data.get("timedOut") is True
+    if status != "connecting" and not timed_out:
+        return None
+    bits = []
+    if status:
+        bits.append(f"status={status}")
+    if timed_out:
+        bits.append("timedOut=true")
+    environment = data.get("environmentId")
+    if environment:
+        bits.append(f"environment={environment}")
+    return " ".join(bits) if bits else "status=connecting"
+
+
 def _print_missing_standalone_warning(path: Path) -> None:
     print(f"remote-control warning → managed standalone Codex missing at {path}")
     print(f"remote-control install → {REMOTE_CONTROL_INSTALL_COMMAND}")
+
+
+def _atomic_write_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_str = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
+    os.close(fd)
+    tmp = Path(tmp_str)
+    try:
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+        _copy_mode(path if path.exists() else None, tmp)
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+
+
+def _repair_remote_selection_payload(data: dict) -> bool:
+    changed = False
+    selected = data.get("selected-remote-host-id")
+    if isinstance(selected, str) and selected.startswith(REMOTE_HOST_PREFIX):
+        data.pop("selected-remote-host-id", None)
+        changed = True
+
+    for key in ELECTRON_REMOTE_STATE_KEYS:
+        if key in data:
+            data.pop(key, None)
+            changed = True
+
+    auto_connect = data.get("remote-connection-auto-connect-by-host-id")
+    if isinstance(auto_connect, dict):
+        for host_id, enabled in list(auto_connect.items()):
+            if isinstance(host_id, str) and host_id.startswith(REMOTE_HOST_PREFIX) and enabled:
+                auto_connect[host_id] = False
+                changed = True
+    return changed
+
+
+def maybe_repair_remote_selection_state(codex: Path) -> None:
+    if not remote_control_repair_allowed(codex):
+        return
+
+    changed_files = 0
+    for rel in GLOBAL_STATE_FILES:
+        path = codex / rel
+        if not path.exists():
+            continue
+        try:
+            data = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        if _repair_remote_selection_payload(data):
+            _atomic_write_json(path, data)
+            changed_files += 1
+
+    if changed_files:
+        print(f"remote selection repaired → {changed_files} files")
 
 
 def maybe_repair_remote_control(codex: Path) -> None:
@@ -451,7 +539,13 @@ def maybe_repair_remote_control(codex: Path) -> None:
         return
 
     first = _run_codex_command(["remote-control", "start", "--json"])
-    if first is None or first.returncode == 0:
+    if first is None:
+        return
+    pending = _remote_control_pending_description(first)
+    if pending:
+        print(f"remote-control warning → daemon still connecting ({pending})")
+        return
+    if first.returncode == 0:
         return
 
     first_output = _combined_output(first)
@@ -890,6 +984,127 @@ def maybe_auto_merge_history(codex: Path, *, keep_models: bool = False) -> None:
             print(f"history backup → {result.backup_dir}")
 
 
+def _parse_index_timestamp_ms(raw: object) -> int:
+    if not isinstance(raw, str) or not raw.strip():
+        return 0
+    text = raw.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return 0
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp() * 1000)
+
+
+def _format_index_timestamp(updated_at: object, updated_at_ms: object) -> str:
+    millis: Optional[int] = None
+    if isinstance(updated_at_ms, int):
+        millis = updated_at_ms
+    elif isinstance(updated_at_ms, float):
+        millis = int(updated_at_ms)
+    elif isinstance(updated_at, int):
+        millis = updated_at * 1000
+    elif isinstance(updated_at, float):
+        millis = int(updated_at * 1000)
+    if millis is None:
+        return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.fromtimestamp(millis / 1000, timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _read_session_index_latest(path: Path) -> dict[str, int]:
+    latest: dict[str, int] = {}
+    if not path.exists():
+        return latest
+    with path.open() as fh:
+        for raw in fh:
+            try:
+                item = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(item, dict):
+                continue
+            thread_id = item.get("id")
+            if not isinstance(thread_id, str) or not thread_id:
+                continue
+            latest[thread_id] = max(latest.get(thread_id, 0), _parse_index_timestamp_ms(item.get("updated_at")))
+    return latest
+
+
+def _session_index_thread_columns(conn: sqlite3.Connection) -> list[str]:
+    columns = sqlite_threads_columns(conn)
+    needed = {"id", "updated_at"}
+    if not needed.issubset(set(columns)):
+        return []
+    return columns
+
+
+def maybe_repair_session_index(codex: Path) -> None:
+    index = codex / "session_index.jsonl"
+    state_db = codex / "state_5.sqlite"
+    if not state_db.exists():
+        return
+    try:
+        conn = connect_sqlite_readonly(state_db)
+    except sqlite3.Error:
+        return
+    try:
+        columns = _session_index_thread_columns(conn)
+        if not columns:
+            return
+        selected = [c for c in ("id", "title", "preview", "updated_at", "updated_at_ms", "archived") if c in columns]
+        select_sql = ", ".join(f'"{c}"' for c in selected)
+        rows = conn.execute(
+            f"""
+            SELECT {select_sql}
+            FROM threads
+            WHERE ifnull(archived, 0) = 0
+            ORDER BY ifnull(updated_at_ms, updated_at * 1000) ASC
+            """
+        ).fetchall()
+    except sqlite3.Error:
+        return
+    finally:
+        conn.close()
+
+    latest = _read_session_index_latest(index)
+    additions: list[dict[str, str]] = []
+    for row in rows:
+        item = {name: value for name, value in zip(selected, row)}
+        thread_id = item.get("id")
+        if not isinstance(thread_id, str) or not thread_id:
+            continue
+        updated_at_ms = item.get("updated_at_ms")
+        updated_at = item.get("updated_at")
+        if isinstance(updated_at_ms, (int, float)):
+            current_ms = int(updated_at_ms)
+        elif isinstance(updated_at, (int, float)):
+            current_ms = int(updated_at * 1000)
+        else:
+            continue
+        if current_ms <= latest.get(thread_id, 0):
+            continue
+        title = item.get("title") or item.get("preview") or "Untitled session"
+        additions.append(
+            {
+                "id": thread_id,
+                "thread_name": str(title),
+                "updated_at": _format_index_timestamp(updated_at, updated_at_ms),
+            }
+        )
+
+    if not additions:
+        return
+
+    index.parent.mkdir(parents=True, exist_ok=True)
+    with index.open("a") as fh:
+        for item in additions:
+            fh.write(json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n")
+    print(f"session index repaired → {len(additions)} entries")
+
+
 def current_looks_official(codex: Path) -> bool:
     cfg = _swap.load(codex / "config.toml")
     auth_path = codex / "auth.json"
@@ -979,6 +1194,8 @@ def switch_to_profile(name: str, *, restart_codex: bool = False) -> int:
     active_file().write_text(normalized_name + "\n")
     print(f"switched → {normalized_name}")
     maybe_auto_merge_history(codex)
+    maybe_repair_session_index(codex)
+    maybe_repair_remote_selection_state(codex)
     maybe_repair_remote_control(codex)
     if restart_codex:
         count = restart_codex_processes()

@@ -108,6 +108,7 @@ codex-switch restart-codex
 
 - 正常切换 profile 时不需要再手动记 `merge-history`。
 - 在 relay profile 和官方 OpenAI 登录之间切换时，历史会继续可见，包括会按 model id 过滤的界面。
+- 如果 `session_index.jsonl` 落后于 SQLite 里的最新 thread，切换时会从 `state_5.sqlite` 补追加索引项，避免移动端历史列表停在旧时间点。
 - 如果本机已经开启过 Codex remote-control，切换时还会顺手检查移动端/桌面远程连接依赖的 managed app-server。遇到旧的 unmanaged unix app-server 占住 socket 时会自动结束旧进程并重试；如果缺少官方 standalone 安装，会打印 `curl -fsSL https://chatgpt.com/codex/install.sh | sh` 这种可执行修复命令。
 - 如果你只想修复 provider，不想覆盖历史里的 model 值，可以继续用 `merge-history --keep-models`。
 - `merge-history --dry-run` 会报告将要更新的 rollout 文件数、行数、SQLite rows，以及会创建的备份路径，但不会写入文件。

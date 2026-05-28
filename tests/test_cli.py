@@ -39,6 +39,45 @@ def write_threads_db(path: Path, provider: str, model: str = "gpt-5.4") -> None:
         conn.close()
 
 
+def write_thread_index_db(
+    path: Path,
+    *,
+    thread_id: str,
+    title: str,
+    updated_at: int,
+    updated_at_ms: int,
+    provider: str,
+    model: str,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE threads (
+                id TEXT,
+                title TEXT,
+                updated_at INTEGER,
+                updated_at_ms INTEGER,
+                archived INTEGER,
+                model_provider TEXT,
+                model TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO threads
+                (id, title, updated_at, updated_at_ms, archived, model_provider, model)
+            VALUES (?, ?, ?, ?, 0, ?, ?)
+            """,
+            (thread_id, title, updated_at, updated_at_ms, provider, model),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 class CodexSwitchCliTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmpdir = tempfile.TemporaryDirectory()
@@ -507,6 +546,127 @@ class CodexSwitchCliTests(unittest.TestCase):
                 ["codex", "remote-control", "start", "--json"],
             ],
         )
+
+    def test_use_clears_stale_remote_selection_state(self) -> None:
+        self.env[cli.REMOTE_CONTROL_REPAIR_ENV] = "1"
+        self.set_current_official()
+        relay_dir = self.profile_root / "relay"
+        relay_dir.mkdir()
+        (relay_dir / "provider.toml").write_text('model_provider = "relay"\n')
+        stale_state = {
+            "selected-remote-host-id": "remote-ssh-codex-managed:tailnet-mm",
+            "electron-local-remote-control-environment-id": "env_old",
+            "electron-local-remote-control-installation-id": "install_old",
+            "remote-connection-auto-connect-by-host-id": {
+                "remote-ssh-discovered:mm": True,
+                "remote-ssh-codex-managed:tailnet-mm": False,
+            },
+        }
+        write_json(self.codex_home / ".codex-global-state.json", stale_state)
+        write_json(self.codex_home / ".codex-global-state.json.bak", stale_state)
+
+        with patch("codex_profile_switcher.cli.shutil.which", return_value=None):
+            _code, output = self.run_cli_output("use", "relay")
+
+        self.assertIn("remote selection repaired → 2 files", output)
+        for path in [
+            self.codex_home / ".codex-global-state.json",
+            self.codex_home / ".codex-global-state.json.bak",
+        ]:
+            repaired = json.loads(path.read_text())
+            self.assertNotIn("selected-remote-host-id", repaired)
+            self.assertNotIn("electron-local-remote-control-environment-id", repaired)
+            self.assertNotIn("electron-local-remote-control-installation-id", repaired)
+            self.assertEqual(
+                repaired["remote-connection-auto-connect-by-host-id"],
+                {
+                    "remote-ssh-discovered:mm": False,
+                    "remote-ssh-codex-managed:tailnet-mm": False,
+                },
+            )
+
+    def test_use_warns_when_remote_control_start_times_out(self) -> None:
+        self.env[cli.REMOTE_CONTROL_REPAIR_ENV] = "1"
+        self.set_current_official()
+        relay_dir = self.profile_root / "relay"
+        relay_dir.mkdir()
+        (relay_dir / "provider.toml").write_text('model_provider = "relay"\n')
+        managed = self.codex_home / "packages" / "standalone" / "current" / "codex"
+        managed.parent.mkdir(parents=True)
+        managed.write_text("#!/bin/sh\n")
+        version = {
+            "managedCodexPath": str(managed),
+            "managedCodexVersion": "0.134.0",
+        }
+        start_payload = {
+            "mode": "daemon",
+            "status": "connecting",
+            "serverName": "mbp.local",
+            "environmentId": "env_new",
+            "timedOut": True,
+        }
+
+        with patch("codex_profile_switcher.cli.shutil.which", return_value="/usr/local/bin/codex"), patch(
+            "codex_profile_switcher.cli.subprocess.run",
+            side_effect=[
+                subprocess.CompletedProcess(
+                    ["codex", "app-server", "daemon", "version"],
+                    0,
+                    stdout=json.dumps(version),
+                    stderr="",
+                ),
+                subprocess.CompletedProcess(
+                    ["codex", "remote-control", "start", "--json"],
+                    0,
+                    stdout=json.dumps(start_payload),
+                    stderr="",
+                ),
+            ],
+        ):
+            _code, output = self.run_cli_output("use", "relay")
+
+        self.assertIn("remote-control warning → daemon still connecting", output)
+        self.assertIn("environment=env_new", output)
+
+    def test_use_repairs_stale_session_index_from_sqlite_threads(self) -> None:
+        self.set_current_official()
+        relay_dir = self.profile_root / "relay"
+        relay_dir.mkdir()
+        (relay_dir / "provider.toml").write_text(
+            '\n'.join([
+                'model = "gpt-5.5"',
+                'model_provider = "relay"',
+                '',
+            ])
+        )
+        index = self.codex_home / "session_index.jsonl"
+        index.write_text(
+            json.dumps(
+                {
+                    "id": "thread-1",
+                    "thread_name": "Old title",
+                    "updated_at": "2026-05-28T08:00:00Z",
+                }
+            )
+            + "\n"
+        )
+        write_thread_index_db(
+            self.codex_home / "state_5.sqlite",
+            thread_id="thread-1",
+            title="New title",
+            updated_at=1779964509,
+            updated_at_ms=1779964509824,
+            provider="relay",
+            model="gpt-5.5",
+        )
+
+        _code, output = self.run_cli_output("use", "relay")
+
+        self.assertIn("session index repaired → 1 entries", output)
+        lines = [json.loads(line) for line in index.read_text().splitlines()]
+        self.assertEqual(lines[-1]["id"], "thread-1")
+        self.assertEqual(lines[-1]["thread_name"], "New title")
+        self.assertEqual(lines[-1]["updated_at"], "2026-05-28T10:35:09.824000Z")
 
 
 if __name__ == "__main__":
