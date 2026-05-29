@@ -629,10 +629,34 @@ def _repair_remote_selection_payload(data: dict) -> bool:
 
     auto_connect = data.get("remote-connection-auto-connect-by-host-id")
     if isinstance(auto_connect, dict):
-        for host_id, enabled in list(auto_connect.items()):
-            if isinstance(host_id, str) and host_id.startswith(REMOTE_HOST_PREFIX) and enabled:
-                auto_connect[host_id] = False
+        for host_id in list(auto_connect):
+            if isinstance(host_id, str) and host_id.startswith(REMOTE_HOST_PREFIX):
+                auto_connect.pop(host_id, None)
                 changed = True
+
+    analytics = data.get("remote-connection-analytics-id-by-host-id")
+    if isinstance(analytics, dict):
+        for host_id in list(analytics):
+            if isinstance(host_id, str) and host_id.startswith(REMOTE_HOST_PREFIX):
+                analytics.pop(host_id, None)
+                changed = True
+
+    for key in ("codex-managed-remote-connections", "remote-projects"):
+        value = data.get(key)
+        if not isinstance(value, list):
+            continue
+        filtered = [
+            item
+            for item in value
+            if not (
+                isinstance(item, dict)
+                and isinstance(item.get("hostId"), str)
+                and item["hostId"].startswith(REMOTE_HOST_PREFIX)
+            )
+        ]
+        if len(filtered) != len(value):
+            data[key] = filtered
+            changed = True
     return changed
 
 

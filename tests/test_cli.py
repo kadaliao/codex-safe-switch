@@ -557,10 +557,25 @@ class CodexSwitchCliTests(unittest.TestCase):
             "selected-remote-host-id": "remote-ssh-codex-managed:tailnet-mm",
             "electron-local-remote-control-environment-id": "env_old",
             "electron-local-remote-control-installation-id": "install_old",
+            "codex-managed-remote-connections": [
+                {"hostId": "remote-ssh-discovered:mm", "displayName": "frp-mm"},
+                {"hostId": "remote-ssh-codex-managed:tailnet-mm", "displayName": "tailnet-mm"},
+                {"hostId": "local-current", "displayName": "local"},
+            ],
             "remote-connection-auto-connect-by-host-id": {
                 "remote-ssh-discovered:mm": True,
                 "remote-ssh-codex-managed:tailnet-mm": False,
+                "local-current": True,
             },
+            "remote-connection-analytics-id-by-host-id": {
+                "remote-ssh-discovered:mm": "analytics-old",
+                "remote-ssh-codex-managed:tailnet-mm": "analytics-tailnet",
+                "local-current": "analytics-local",
+            },
+            "remote-projects": [
+                {"hostId": "remote-ssh-discovered:mm", "remotePath": "/tmp/old"},
+                {"hostId": "local-current", "remotePath": "/tmp/local"},
+            ],
         }
         write_json(self.codex_home / ".codex-global-state.json", stale_state)
         write_json(self.codex_home / ".codex-global-state.json.bak", stale_state)
@@ -579,10 +594,19 @@ class CodexSwitchCliTests(unittest.TestCase):
             self.assertNotIn("electron-local-remote-control-installation-id", repaired)
             self.assertEqual(
                 repaired["remote-connection-auto-connect-by-host-id"],
-                {
-                    "remote-ssh-discovered:mm": False,
-                    "remote-ssh-codex-managed:tailnet-mm": False,
-                },
+                {"local-current": True},
+            )
+            self.assertEqual(
+                repaired["remote-connection-analytics-id-by-host-id"],
+                {"local-current": "analytics-local"},
+            )
+            self.assertEqual(
+                repaired["codex-managed-remote-connections"],
+                [{"hostId": "local-current", "displayName": "local"}],
+            )
+            self.assertEqual(
+                repaired["remote-projects"],
+                [{"hostId": "local-current", "remotePath": "/tmp/local"}],
             )
 
     def test_use_warns_when_remote_control_start_times_out(self) -> None:

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "codex-profile-switcher"
-version = "0.5.7"
+version = "0.5.8"
 description = "Switch between OpenAI Codex CLI provider configurations (official ChatGPT login, third-party relays, multiple API keys). CLI + Alfred workflow."
 readme = "README.md"
 requires-python = ">=3.10"
