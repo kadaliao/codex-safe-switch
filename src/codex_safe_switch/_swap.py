@@ -1,4 +1,4 @@
-"""TOML provider-section helper for codex-switch.
+"""TOML provider-section helper for codex-safe-switch.
 
 Defines which keys belong to a "provider" (and thus get swapped between profiles)
 vs which are local state (preserved across switches).

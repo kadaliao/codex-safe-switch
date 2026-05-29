@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>bundleid</key>
-    <string>top.kada.codex-profile-switcher</string>
+    <string>top.kada.codex-safe-switch</string>
     <key>name</key>
     <string>Codex Profile Switcher</string>
     <key>description</key>
@@ -15,9 +15,9 @@
     <key>version</key>
     <string>1.0</string>
     <key>readme</key>
-    <string>Trigger with keyword cx. Lists profiles from ~/.codex/profiles/; ★ marks the active one. Selecting a profile runs codex-switch use &lt;name&gt;.
+    <string>Trigger with keyword cx. Lists profiles from ~/.codex/profiles/; ★ marks the active one. Selecting a profile runs codex-safe-switch use &lt;name&gt;.
 
-Requires: uv tool install git+https://github.com/kadaliao/codex-profile-switcher.git</string>
+Requires: uv tool install git+https://github.com/kadaliao/codex-safe-switch.git</string>
     <key>webaddress</key>
     <string></string>
     <key>connections</key>
@@ -79,7 +79,7 @@ Requires: uv tool install git+https://github.com/kadaliao/codex-profile-switcher
                 <key>runningsubtext</key>
                 <string>loading profiles…</string>
                 <key>script</key>
-                <string>"$HOME/.local/bin/codex-switch" alfred-list</string>
+                <string>"$HOME/.local/bin/codex-safe-switch" alfred-list</string>
                 <key>scriptargtype</key>
                 <integer>1</integer>
                 <key>scriptfile</key>
@@ -108,7 +108,7 @@ Requires: uv tool install git+https://github.com/kadaliao/codex-profile-switcher
                 <key>escaping</key>
                 <integer>102</integer>
                 <key>script</key>
-                <string>"$HOME/.local/bin/codex-switch" use "$1"</string>
+                <string>"$HOME/.local/bin/codex-safe-switch" use "$1"</string>
                 <key>scriptargtype</key>
                 <integer>1</integer>
                 <key>scriptfile</key>

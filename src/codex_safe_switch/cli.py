@@ -1,4 +1,4 @@
-"""codex-switch — manage Codex provider profiles.
+"""codex-safe-switch — manage Codex provider profiles.
 
 Storage layout:
 
@@ -224,13 +224,13 @@ def bootstrap_current_profile(*, verbose: bool = True) -> Optional[str]:
 
 def no_profiles_message() -> str:
     return (
-        "no profiles yet — configure Codex once, then run `codex-switch` to import it, "
-        "or create one with `codex-switch save <name>`"
+        "no profiles yet — configure Codex once, then run `codex-safe-switch` to import it, "
+        "or create one with `codex-safe-switch save <name>`"
     )
 
 
 def _die(msg: str) -> "NoReturn":  # type: ignore[name-defined]
-    print(f"codex-switch: {msg}", file=sys.stderr)
+    print(f"codex-safe-switch: {msg}", file=sys.stderr)
     raise SystemExit(1)
 
 
@@ -259,7 +259,7 @@ def _looks_like_codex_process(pid: int, args: str) -> bool:
     if pid == os.getpid():
         return False
     lower = args.lower()
-    if "codex-switch" in lower or "codex_profile_switcher" in lower:
+    if "codex-safe-switch" in lower or "codex_safe_switch" in lower:
         return False
     if _looks_like_remote_proxy_process(pid, args):
         return True
@@ -315,7 +315,7 @@ def _looks_like_unmanaged_app_server(pid: int, args: str) -> bool:
     if pid == os.getpid():
         return False
     lower = args.lower()
-    if "codex-switch" in lower or "codex_profile_switcher" in lower:
+    if "codex-safe-switch" in lower or "codex_safe_switch" in lower:
         return False
     if "--listen unix://" not in lower:
         return False
@@ -369,7 +369,7 @@ def _looks_like_remote_proxy_process(pid: int, args: str) -> bool:
     if pid == os.getpid():
         return False
     lower = args.lower()
-    if "codex-switch" in lower or "codex_profile_switcher" in lower:
+    if "codex-safe-switch" in lower or "codex_safe_switch" in lower:
         return False
     if "codex app-server proxy" in lower:
         return True
@@ -1317,7 +1317,7 @@ def ensure_official_snapshot_available(codex: Path) -> None:
     if current_looks_official(codex):
         snapshot_official_state(codex)
         return
-    _die("official OpenAI snapshot not found; switch to official once, then run `codex-switch official`")
+    _die("official OpenAI snapshot not found; switch to official once, then run `codex-safe-switch official`")
 
 
 def switch_to_profile(name: str, *, restart_codex: bool = False) -> int:
@@ -1663,7 +1663,7 @@ def cmd_alfred_list(_args) -> int:
             "uid": "initialize",
             "title": "Initialize Codex profiles",
             "arg": ALFRED_INIT_ARG,
-            "subtitle": "Run codex-switch save <name> after configuring Codex once",
+            "subtitle": "Run codex-safe-switch save <name> after configuring Codex once",
             "autocomplete": "initialize",
         })
     print(json.dumps({"items": items}, ensure_ascii=False))
@@ -1692,7 +1692,7 @@ def cmd_restart_codex(_args) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="codex-switch",
+        prog="codex-safe-switch",
         description="Switch between Codex provider profiles. Run with no subcommand for an interactive picker.",
     )
     subs = p.add_subparsers(dest="cmd", metavar="<command>")
@@ -1762,7 +1762,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             return cmd_pick(args)
         return args.func(args)
     except KeyboardInterrupt:
-        print("codex-switch: interrupted", file=sys.stderr)
+        print("codex-safe-switch: interrupted", file=sys.stderr)
         return 130
 
 

@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from codex_profile_switcher import cli
+from codex_safe_switch import cli
 
 
 def write_json(path: Path, data: dict) -> None:
@@ -199,20 +199,20 @@ class CodexSwitchCliTests(unittest.TestCase):
         payload = json.loads(output)
         self.assertEqual(payload["items"][0]["title"], "Initialize Codex profiles")
         self.assertEqual(payload["items"][0]["arg"], "__init__")
-        self.assertIn("Run codex-switch save", payload["items"][0]["subtitle"])
+        self.assertIn("Run codex-safe-switch save", payload["items"][0]["subtitle"])
 
     def test_restart_codex_kills_only_matching_codex_processes(self) -> None:
         ps_output = "\n".join([
             "101 /Applications/Codex.app/Contents/MacOS/Codex",
             "102 /usr/local/bin/codex app-server",
-            "103 /Users/me/.local/bin/codex-switch restart-codex",
+            "103 /Users/me/.local/bin/codex-safe-switch restart-codex",
             "104 /usr/bin/python other.py",
             "",
         ])
 
-        with patch("codex_profile_switcher.cli._ps_output", return_value=ps_output), patch(
-            "codex_profile_switcher.cli._pid_exists", return_value=False
-        ), patch("codex_profile_switcher.cli.os.kill") as kill:
+        with patch("codex_safe_switch.cli._ps_output", return_value=ps_output), patch(
+            "codex_safe_switch.cli._pid_exists", return_value=False
+        ), patch("codex_safe_switch.cli.os.kill") as kill:
             _code, output = self.run_cli_output("restart-codex")
 
         self.assertIn("restarted Codex processes → 2", output)
@@ -225,7 +225,7 @@ class CodexSwitchCliTests(unittest.TestCase):
         write_json(relay_dir / "auth.json", {"auth_mode": "apikey", "OPENAI_API_KEY": "relay"})
         (relay_dir / "provider.toml").write_text('model_provider = "relay"\n')
 
-        with patch("codex_profile_switcher.cli.restart_codex_processes", return_value=3) as restart:
+        with patch("codex_safe_switch.cli.restart_codex_processes", return_value=3) as restart:
             _code, output = self.run_cli_output("use", "relay", "--restart-codex")
 
         self.assertIn("switched → relay", output)
@@ -296,12 +296,12 @@ class CodexSwitchCliTests(unittest.TestCase):
         )
 
     def test_ctrl_c_exits_cleanly_without_traceback(self) -> None:
-        with patch("codex_profile_switcher.cli.cmd_pick", side_effect=KeyboardInterrupt):
+        with patch("codex_safe_switch.cli.cmd_pick", side_effect=KeyboardInterrupt):
             code, stdout, stderr = self.run_cli_streams()
 
         self.assertEqual(code, 130)
         self.assertEqual(stdout, "")
-        self.assertEqual(stderr, "codex-switch: interrupted\n")
+        self.assertEqual(stderr, "codex-safe-switch: interrupted\n")
 
     def test_use_openai_alias_restores_official_snapshot_and_merges_history(self) -> None:
         self.set_current_official()
@@ -468,8 +468,8 @@ class CodexSwitchCliTests(unittest.TestCase):
             "appServerVersion": "0.134.0",
         }
 
-        with patch("codex_profile_switcher.cli.shutil.which", return_value="/usr/local/bin/codex"), patch(
-            "codex_profile_switcher.cli.subprocess.run",
+        with patch("codex_safe_switch.cli.shutil.which", return_value="/usr/local/bin/codex"), patch(
+            "codex_safe_switch.cli.subprocess.run",
             return_value=subprocess.CompletedProcess(
                 ["codex", "app-server", "daemon", "version"],
                 0,
@@ -529,11 +529,11 @@ class CodexSwitchCliTests(unittest.TestCase):
             ),
         ]
 
-        with patch("codex_profile_switcher.cli.shutil.which", return_value="/usr/local/bin/codex"), patch(
-            "codex_profile_switcher.cli.subprocess.run", side_effect=calls
-        ) as run, patch("codex_profile_switcher.cli._ps_output", return_value=ps_output), patch(
-            "codex_profile_switcher.cli._pid_exists", return_value=False
-        ), patch("codex_profile_switcher.cli.os.kill") as kill:
+        with patch("codex_safe_switch.cli.shutil.which", return_value="/usr/local/bin/codex"), patch(
+            "codex_safe_switch.cli.subprocess.run", side_effect=calls
+        ) as run, patch("codex_safe_switch.cli._ps_output", return_value=ps_output), patch(
+            "codex_safe_switch.cli._pid_exists", return_value=False
+        ), patch("codex_safe_switch.cli.os.kill") as kill:
             _code, output = self.run_cli_output("use", "relay")
 
         self.assertIn("remote-control repaired → restarted managed app-server", output)
@@ -580,7 +580,7 @@ class CodexSwitchCliTests(unittest.TestCase):
         write_json(self.codex_home / ".codex-global-state.json", stale_state)
         write_json(self.codex_home / ".codex-global-state.json.bak", stale_state)
 
-        with patch("codex_profile_switcher.cli.shutil.which", return_value=None):
+        with patch("codex_safe_switch.cli.shutil.which", return_value=None):
             _code, output = self.run_cli_output("use", "relay")
 
         self.assertIn("remote selection repaired → 2 files", output)
@@ -630,8 +630,8 @@ class CodexSwitchCliTests(unittest.TestCase):
             "timedOut": True,
         }
 
-        with patch("codex_profile_switcher.cli.shutil.which", return_value="/usr/local/bin/codex"), patch(
-            "codex_profile_switcher.cli.subprocess.run",
+        with patch("codex_safe_switch.cli.shutil.which", return_value="/usr/local/bin/codex"), patch(
+            "codex_safe_switch.cli.subprocess.run",
             side_effect=[
                 subprocess.CompletedProcess(
                     ["codex", "app-server", "daemon", "version"],
@@ -646,7 +646,7 @@ class CodexSwitchCliTests(unittest.TestCase):
                     stderr="",
                 ),
             ],
-        ), patch("codex_profile_switcher.cli._ps_output", return_value=""):
+        ), patch("codex_safe_switch.cli._ps_output", return_value=""):
             _code, output = self.run_cli_output("use", "relay")
 
         self.assertIn("remote-control warning → daemon still connecting", output)
@@ -674,8 +674,8 @@ class CodexSwitchCliTests(unittest.TestCase):
             "appServerVersion": "0.134.0",
         }
 
-        with patch("codex_profile_switcher.cli.shutil.which", return_value="/usr/local/bin/codex"), patch(
-            "codex_profile_switcher.cli.subprocess.run",
+        with patch("codex_safe_switch.cli.shutil.which", return_value="/usr/local/bin/codex"), patch(
+            "codex_safe_switch.cli.subprocess.run",
             side_effect=[
                 subprocess.CompletedProcess(
                     ["codex", "app-server", "daemon", "version"],
@@ -696,7 +696,7 @@ class CodexSwitchCliTests(unittest.TestCase):
                     stderr="",
                 ),
             ],
-        ), patch("codex_profile_switcher.cli._ps_output", return_value=""):
+        ), patch("codex_safe_switch.cli._ps_output", return_value=""):
             _code, output = self.run_cli_output("use", "relay")
 
         self.assertIn("codex cli warning → multiple Codex CLI versions are active", output)
@@ -729,8 +729,8 @@ class CodexSwitchCliTests(unittest.TestCase):
             ]
         )
 
-        with patch("codex_profile_switcher.cli.shutil.which", return_value="/usr/local/bin/codex"), patch(
-            "codex_profile_switcher.cli.subprocess.run",
+        with patch("codex_safe_switch.cli.shutil.which", return_value="/usr/local/bin/codex"), patch(
+            "codex_safe_switch.cli.subprocess.run",
             side_effect=[
                 subprocess.CompletedProcess(
                     ["codex", "app-server", "daemon", "version"],
@@ -745,9 +745,9 @@ class CodexSwitchCliTests(unittest.TestCase):
                     stderr="",
                 ),
             ],
-        ), patch("codex_profile_switcher.cli._ps_output", return_value=ps_output), patch(
-            "codex_profile_switcher.cli._pid_exists", return_value=False
-        ), patch("codex_profile_switcher.cli.os.kill") as kill:
+        ), patch("codex_safe_switch.cli._ps_output", return_value=ps_output), patch(
+            "codex_safe_switch.cli._pid_exists", return_value=False
+        ), patch("codex_safe_switch.cli.os.kill") as kill:
             _code, output = self.run_cli_output("use", "relay")
 
         self.assertIn("remote-control repaired → stopped stale remote proxy processes (stopped 3)", output)
@@ -778,8 +778,8 @@ class CodexSwitchCliTests(unittest.TestCase):
             "",
         ])
 
-        with patch("codex_profile_switcher.cli.shutil.which", return_value="/usr/local/bin/codex"), patch(
-            "codex_profile_switcher.cli.subprocess.run",
+        with patch("codex_safe_switch.cli.shutil.which", return_value="/usr/local/bin/codex"), patch(
+            "codex_safe_switch.cli.subprocess.run",
             side_effect=[
                 subprocess.CompletedProcess(
                     ["codex", "app-server", "daemon", "version"],
@@ -794,9 +794,9 @@ class CodexSwitchCliTests(unittest.TestCase):
                     stderr="",
                 ),
             ],
-        ), patch("codex_profile_switcher.cli._ps_output", side_effect=[ps_before, ps_after]), patch(
-            "codex_profile_switcher.cli._pid_exists", return_value=False
-        ), patch("codex_profile_switcher.cli.os.kill"):
+        ), patch("codex_safe_switch.cli._ps_output", side_effect=[ps_before, ps_after]), patch(
+            "codex_safe_switch.cli._pid_exists", return_value=False
+        ), patch("codex_safe_switch.cli.os.kill"):
             _code, output = self.run_cli_output("use", "relay")
 
         self.assertIn("remote-control repaired → stopped stale remote proxy processes (stopped 2)", output)
@@ -814,9 +814,9 @@ class CodexSwitchCliTests(unittest.TestCase):
             ]
         )
 
-        with patch("codex_profile_switcher.cli._ps_output", return_value=ps_output), patch(
-            "codex_profile_switcher.cli._pid_exists", return_value=False
-        ), patch("codex_profile_switcher.cli.os.kill") as kill:
+        with patch("codex_safe_switch.cli._ps_output", return_value=ps_output), patch(
+            "codex_safe_switch.cli._pid_exists", return_value=False
+        ), patch("codex_safe_switch.cli.os.kill") as kill:
             _code, output = self.run_cli_output("restart-codex")
 
         self.assertIn("restarted Codex processes → 3", output)

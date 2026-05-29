@@ -3,8 +3,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "codex-profile-switcher"
-version = "0.5.8"
+name = "codex-safe-switch"
+version = "1.0.0"
 description = "Switch between OpenAI Codex CLI provider configurations (official ChatGPT login, third-party relays, multiple API keys). CLI + Alfred workflow."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -23,11 +23,11 @@ classifiers = [
 dependencies = ["tomlkit>=0.13"]
 
 [project.urls]
-Homepage = "https://github.com/kadaliao/codex-profile-switcher"
-Issues = "https://github.com/kadaliao/codex-profile-switcher/issues"
+Homepage = "https://github.com/kadaliao/codex-safe-switch"
+Issues = "https://github.com/kadaliao/codex-safe-switch/issues"
 
 [project.scripts]
-codex-switch = "codex_profile_switcher.cli:main"
+codex-safe-switch = "codex_safe_switch.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/codex_profile_switcher"]
+packages = ["src/codex_safe_switch"]
