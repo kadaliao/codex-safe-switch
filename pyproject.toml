@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "codex-safe-switch"
-version = "1.0.1"
-description = "Switch between OpenAI Codex CLI provider configurations (official ChatGPT login, third-party relays, multiple API keys). CLI + Alfred workflow."
+version = "1.0.2"
+description = "Switch between OpenAI Codex CLI provider configurations (official OpenAI provider, third-party relays, multiple API keys). CLI + Alfred workflow."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

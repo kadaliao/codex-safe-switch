@@ -5,7 +5,7 @@
 
 [中文](README.md) | English
 
-One command to switch [Codex CLI](https://github.com/openai/codex) provider configs — official ChatGPT login, third-party relays, multiple API keys. CLI + optional Alfred workflow.
+One command to switch [Codex CLI](https://github.com/openai/codex) provider configs — official OpenAI provider, third-party relays, multiple API keys. CLI + optional Alfred workflow.
 
 ## Install
 
@@ -21,7 +21,7 @@ Requires [`uv`](https://github.com/astral-sh/uv). Installs `codex-safe-switch` o
 codex-safe-switch           # interactive picker (↑/↓, enter to switch)
 codex-safe-switch ls        # list profiles, ★ marks the active one
 codex-safe-switch save dev  # snapshot current ~/.codex state as `dev`
-codex-safe-switch official  # switch back to the official OpenAI ChatGPT login
+codex-safe-switch official  # switch back to the official OpenAI provider
 ```
 
 First run imports your existing `~/.codex/config.toml` so nothing is lost.
@@ -33,10 +33,10 @@ First run imports your existing `~/.codex/config.toml` so nothing is lost.
 codex-safe-switch              # interactive picker
 codex-safe-switch ls           # list profiles, ★ marks the active one
 codex-safe-switch current      # print the active profile
-codex-safe-switch official     # switch back to official OpenAI ChatGPT login (alias: openai)
+codex-safe-switch official     # switch back to the official OpenAI provider (alias: openai)
 codex-safe-switch use [name]   # load <name>; omit for the picker
-codex-safe-switch save <name>  # snapshot the current ~/.codex state as <name>
-codex-safe-switch show <name>  # print <name>'s provider.toml + auth.json key names
+codex-safe-switch save <name>  # snapshot the current provider config as <name>
+codex-safe-switch show <name>  # print <name>'s provider.toml and session state
 codex-safe-switch state <name> # show/set the session-state scope for a profile
 codex-safe-switch rm <name>    # delete profile (the active one is protected)
 codex-safe-switch restart-codex
@@ -72,7 +72,7 @@ The workflow calls `$HOME/.local/bin/codex-safe-switch`. If `uv tool install` pu
 - `wire_api`, `disable_response_storage`, `preferred_auth_method`
 - `[model_providers.*]`
 
-**`auth.json` is only copied when needed.** A profile stores or writes back `auth.json` only when the provider explicitly needs OpenAI/ChatGPT auth, or for legacy API-key configs that don't declare `requires_openai_auth = false`. Relays that use `env_key` won't clobber your official ChatGPT login cache — Codex remote connections can keep using the same ChatGPT account.
+**`auth.json` is not managed.** Profiles only store provider-related config; `~/.codex/auth.json` stays owned by Codex itself. `save`, `use`, and `official` never save or write back `auth.json`, so switching providers does not overwrite your official ChatGPT login cache or local auth state.
 
 **History is aligned by default.** Every `use` / `official` aligns local Codex history metadata to the active provider and model, so session history stays visible across relays and the official OpenAI login:
 
@@ -81,7 +81,7 @@ The workflow calls `$HOME/.local/bin/codex-safe-switch`. If `uv tool install` pu
 - On hosts that have used Codex remote-control, the switch also checks the managed app-server path and clears stale unix sockets / stale SSH remote proxy processes.
 - `merge-history --keep-models` does a provider-only repair; `--dry-run` previews; `doctor-history` is read-only diagnostics.
 
-**One-step back to official.** `codex-safe-switch official` is the shortcut back to the official ChatGPT login. The tool keeps a hidden `~/.codex/profiles/.official/` snapshot, refreshed automatically the first time you switch away from official.
+**One-step back to official.** `codex-safe-switch official` is the shortcut back to the official OpenAI provider. The tool keeps a hidden provider snapshot at `~/.codex/profiles/.official/`, refreshed automatically the first time you switch away from official.
 
 **Process isolation.** `restart-codex` (and `--restart-codex`) precisely skips the `codex-safe-switch` process itself so it never kills its own switch.
 
@@ -94,17 +94,15 @@ The workflow calls `$HOME/.local/bin/codex-safe-switch`. If `uv tool install` pu
 ~/.codex/profiles/
 ├── .active                       # plaintext: name of the active profile
 ├── .official/
-│   ├── auth.json                 # copied into ~/.codex/auth.json on switch
-│   └── provider.toml             # official login provider slice
+│   └── provider.toml             # official OpenAI provider slice
 └── myrelay/
-    ├── auth.json                 # optional; only when the profile owns a key/token
     └── provider.toml             # only provider-related keys (see examples/)
 ```
 
 **Add a relay profile**
 
 1. Configure the relay normally in `~/.codex/config.toml` and verify `codex` works.
-2. If the key comes from the environment, prefer `requires_openai_auth = false` plus `env_key = "..."`. That profile doesn't need `auth.json`; switching to it preserves the current official ChatGPT login cache.
+2. If the key comes from the environment, set `env_key = "..."` in the provider config; profiles do not need or store `auth.json`.
 3. `codex-safe-switch save <name>` — snapshots the provider slice into a new profile.
 4. Use `cx` (Alfred) or `codex-safe-switch use <name>` to switch anytime.
 

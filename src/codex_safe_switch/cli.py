@@ -6,7 +6,6 @@ Storage layout:
       ├── .active                   # name of the currently-loaded profile
       ├── .official/                # reserved snapshot for official OpenAI login
       └── <name>/
-            ├── auth.json           # optional; copied only when the profile owns auth
             ├── provider.toml       # merged into ~/.codex/config.toml
             └── session.toml        # optional session-state scope metadata
 """
@@ -153,26 +152,6 @@ def current_identity() -> IdentityConfig:
     return IdentityConfig(provider=provider or None, model=model or None)
 
 
-def profile_requires_auth_file(profile_dir: Path, provider_doc=None) -> bool:
-    """Return true when switching this profile should replace ~/.codex/auth.json."""
-    if normalize_profile_name(profile_dir.name) == OFFICIAL_PROFILE_NAME:
-        return True
-    doc = provider_doc if provider_doc is not None else _swap.load(profile_dir / "provider.toml")
-    preferred_auth_method = str(doc.get("preferred_auth_method") or "").strip()
-    if preferred_auth_method == "chatgpt":
-        return True
-    provider = str(doc.get("model_provider") or "").strip()
-    providers = doc.get("model_providers")
-    if provider and providers is not None and provider in providers:
-        provider_cfg = providers[provider]
-        requires = provider_cfg.get("requires_openai_auth")
-        if requires is not None:
-            return bool(requires)
-    if preferred_auth_method == "apikey":
-        return True
-    return not provider
-
-
 def list_profiles() -> list[str]:
     root = profile_root()
     if not root.exists():
@@ -202,12 +181,11 @@ def bootstrap_current_profile(*, verbose: bool = True) -> Optional[str]:
         return None
 
     codex = codex_dir()
-    auth = codex / "auth.json"
     cfg = codex / "config.toml"
-    if not auth.is_file():
+    if not cfg.is_file():
         return None
 
-    if current_looks_official(codex):
+    if current_provider_looks_official(codex):
         snapshot_official_state(codex)
         name = OFFICIAL_PROFILE_NAME
     else:
@@ -219,8 +197,6 @@ def bootstrap_current_profile(*, verbose: bool = True) -> Optional[str]:
             _swap.extract(cfg, dir_ / "provider.toml")
         else:
             (dir_ / "provider.toml").write_text("")
-        if profile_requires_auth_file(dir_):
-            shutil.copy2(auth, dir_ / "auth.json")
         write_session_config(dir_, SessionConfig())
 
     active_file().parent.mkdir(parents=True, exist_ok=True)
@@ -1394,43 +1370,31 @@ def maybe_repair_session_index(codex: Path) -> None:
     print(f"session index repaired → {len(additions)} entries")
 
 
-def current_looks_official(codex: Path) -> bool:
+def current_provider_looks_official(codex: Path) -> bool:
     cfg = _swap.load(codex / "config.toml")
-    auth_path = codex / "auth.json"
-    if not auth_path.exists():
-        return False
-    try:
-        auth = json.loads(auth_path.read_text())
-    except json.JSONDecodeError:
-        return False
     provider = str(cfg.get("model_provider") or "").strip()
     auth_method = str(cfg.get("preferred_auth_method") or "").strip()
-    auth_mode = str(auth.get("auth_mode") or "").strip()
-    return provider == "openai" and auth_mode == "chatgpt" and auth_method in {"", "chatgpt"}
+    return provider == "openai" and auth_method in {"", "chatgpt"}
 
 
 def snapshot_official_state(codex: Path) -> None:
-    auth = codex / "auth.json"
     cfg = codex / "config.toml"
-    if not auth.is_file():
-        _die(f"no {auth} to snapshot")
     dir_ = official_profile_dir()
     dir_.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(auth, dir_ / "auth.json")
     if cfg.is_file():
         _swap.extract(cfg, dir_ / "provider.toml")
     else:
         (dir_ / "provider.toml").write_text("")
+    (dir_ / "auth.json").unlink(missing_ok=True)
     write_session_config(dir_, SessionConfig())
 
 
 def ensure_official_snapshot_available(codex: Path) -> None:
     if official_profile_dir().is_dir():
-        auth = official_profile_dir() / "auth.json"
         prov = official_profile_dir() / "provider.toml"
-        if auth.is_file() and prov.is_file():
+        if prov.is_file():
             return
-    if current_looks_official(codex):
+    if current_provider_looks_official(codex):
         snapshot_official_state(codex)
         return
     _die("official OpenAI snapshot not found; switch to official once, then run `codex-safe-switch official`")
@@ -1444,22 +1408,16 @@ def switch_to_profile(name: str, *, restart_codex: bool = False) -> int:
         dir_ = profile_dir_for_name(normalized_name)
         if not dir_.is_dir():
             _die(f"profile not found: {name}")
-    auth_src = dir_ / "auth.json"
     prov_src = dir_ / "provider.toml"
     if not prov_src.is_file():
         _die(f"missing {prov_src}")
-    provider_doc = _swap.load(prov_src)
-    needs_auth_file = profile_requires_auth_file(dir_, provider_doc)
-    if needs_auth_file and not auth_src.is_file():
-        _die(f"missing {auth_src}")
 
     codex = codex_dir()
     codex.mkdir(parents=True, exist_ok=True)
     cfg = codex / "config.toml"
-    auth = codex / "auth.json"
     current = normalize_profile_name(active_name())
 
-    if current_looks_official(codex) and normalized_name != OFFICIAL_PROFILE_NAME:
+    if current_provider_looks_official(codex) and normalized_name != OFFICIAL_PROFILE_NAME:
         snapshot_official_state(codex)
 
     if not cfg.exists():
@@ -1476,8 +1434,6 @@ def switch_to_profile(name: str, *, restart_codex: bool = False) -> int:
         if tmp_cfg.exists():
             tmp_cfg.unlink(missing_ok=True)
 
-    if needs_auth_file:
-        _atomic_write_copy(auth_src, auth)
     maybe_switch_session_state(current, normalized_name, codex)
 
     active_file().write_text(normalized_name + "\n")
@@ -1650,18 +1606,12 @@ def cmd_save(args) -> int:
     dir_.mkdir(parents=True, exist_ok=True)
 
     codex = codex_dir()
-    auth = codex / "auth.json"
     cfg = codex / "config.toml"
     if cfg.is_file():
         _swap.extract(cfg, dir_ / "provider.toml")
     else:
         (dir_ / "provider.toml").write_text("")
-    if profile_requires_auth_file(dir_):
-        if not auth.is_file():
-            _die(f"no {auth} to snapshot")
-        shutil.copy2(auth, dir_ / "auth.json")
-    else:
-        (dir_ / "auth.json").unlink(missing_ok=True)
+    (dir_ / "auth.json").unlink(missing_ok=True)
 
     if args.shared:
         session_cfg = SessionConfig()
@@ -1688,18 +1638,6 @@ def cmd_show(args) -> int:
     if prov.exists():
         text = prov.read_text()
         print(text if text else "(empty)")
-    else:
-        print("(missing)")
-    print()
-    auth = dir_ / "auth.json"
-    print(f"# {auth} (keys only)")
-    if auth.exists():
-        try:
-            data = json.loads(auth.read_text())
-            for k in sorted(data.keys()):
-                print(k)
-        except json.JSONDecodeError as e:
-            print(f"(invalid json: {e})")
     else:
         print("(missing)")
     print()
@@ -1819,7 +1757,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = subs.add_parser("current", help="print the active profile name")
     s.set_defaults(func=cmd_current)
 
-    s = subs.add_parser("official", aliases=["openai"], help="switch back to official OpenAI ChatGPT login")
+    s = subs.add_parser("official", aliases=["openai"], help="switch back to the official OpenAI provider")
     s.add_argument("--restart-codex", action="store_true", help="terminate Codex app/server processes after switching")
     s.set_defaults(func=cmd_official)
 
@@ -1828,13 +1766,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--restart-codex", action="store_true", help="terminate Codex app/server processes after switching")
     s.set_defaults(func=cmd_use)
 
-    s = subs.add_parser("save", help="snapshot the current ~/.codex state as <name>")
+    s = subs.add_parser("save", help="snapshot the current provider config as <name>")
     s.add_argument("name")
     s.add_argument("--scope", help="also bind this profile to a session-state scope and seed it now")
     s.add_argument("--shared", action="store_true", help="clear any session-state scope while saving")
     s.set_defaults(func=cmd_save)
 
-    s = subs.add_parser("show", help="print <name>'s provider.toml + auth.json keys")
+    s = subs.add_parser("show", help="print <name>'s provider.toml and session state")
     s.add_argument("name")
     s.set_defaults(func=cmd_show)
 

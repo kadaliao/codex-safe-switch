@@ -153,11 +153,11 @@ class CodexSwitchCliTests(unittest.TestCase):
         self.assertIn("initialized profile from existing Codex config → relay", output)
         self.assertIn("★ relay", output)
         self.assertEqual((self.profile_root / ".active").read_text().strip(), "relay")
-        self.assertTrue((self.profile_root / "relay" / "auth.json").is_file())
+        self.assertFalse((self.profile_root / "relay" / "auth.json").exists())
         provider = (self.profile_root / "relay" / "provider.toml").read_text()
         self.assertIn('model_provider = "relay"', provider)
 
-    def test_save_env_key_profile_does_not_store_chatgpt_tokens(self) -> None:
+    def test_save_profile_only_stores_provider_config(self) -> None:
         self.set_current_official()
         (self.codex_home / "config.toml").write_text(
             '\n'.join([
@@ -191,7 +191,22 @@ class CodexSwitchCliTests(unittest.TestCase):
         self.assertIn("initialized profile from existing Codex config → official", output)
         self.assertIn("★ official", output)
         self.assertEqual((self.profile_root / ".active").read_text().strip(), "official")
-        self.assertTrue((self.profile_root / ".official" / "auth.json").is_file())
+        self.assertFalse((self.profile_root / ".official" / "auth.json").exists())
+        provider = (self.profile_root / ".official" / "provider.toml").read_text()
+        self.assertIn('model_provider = "openai"', provider)
+
+    def test_first_run_ls_imports_official_provider_config_without_auth_json(self) -> None:
+        (self.codex_home / "config.toml").write_text(
+            'model = "gpt-5.4"\nmodel_provider = "openai"\npreferred_auth_method = "chatgpt"\n'
+        )
+
+        _code, output = self.run_cli_output("ls")
+
+        self.assertIn("initialized profile from existing Codex config → official", output)
+        self.assertIn("★ official", output)
+        self.assertFalse((self.profile_root / ".official" / "auth.json").exists())
+        provider = (self.profile_root / ".official" / "provider.toml").read_text()
+        self.assertIn('model_provider = "openai"', provider)
 
     def test_alfred_list_offers_initialize_action_when_profiles_and_config_are_missing(self) -> None:
         _code, output = self.run_cli_output("alfred-list")
@@ -222,7 +237,6 @@ class CodexSwitchCliTests(unittest.TestCase):
         self.set_current_official()
         relay_dir = self.profile_root / "relay"
         relay_dir.mkdir()
-        write_json(relay_dir / "auth.json", {"auth_mode": "apikey", "OPENAI_API_KEY": "relay"})
         (relay_dir / "provider.toml").write_text('model_provider = "relay"\n')
 
         with patch("codex_safe_switch.cli.restart_codex_processes", return_value=3) as restart:
@@ -295,6 +309,31 @@ class CodexSwitchCliTests(unittest.TestCase):
             {"auth_mode": "chatgpt", "token": "official"},
         )
 
+    def test_switching_profile_with_auth_file_never_replaces_current_auth_json(self) -> None:
+        self.set_current_official()
+        original_auth_text = (self.codex_home / "auth.json").read_text()
+        relay_dir = self.profile_root / "relay"
+        relay_dir.mkdir()
+        write_json(relay_dir / "auth.json", {"auth_mode": "apikey", "OPENAI_API_KEY": "relay"})
+        (relay_dir / "provider.toml").write_text(
+            '\n'.join([
+                'model = "gpt-5.5"',
+                'model_provider = "relay"',
+                'preferred_auth_method = "apikey"',
+                '',
+                '[model_providers.relay]',
+                'name = "relay"',
+                'base_url = "https://relay.example/openai"',
+                'wire_api = "responses"',
+                '',
+            ])
+        )
+
+        _code, output = self.run_cli_output("use", "relay")
+
+        self.assertIn("switched → relay", output)
+        self.assertEqual((self.codex_home / "auth.json").read_text(), original_auth_text)
+
     def test_ctrl_c_exits_cleanly_without_traceback(self) -> None:
         with patch("codex_safe_switch.cli.cmd_pick", side_effect=KeyboardInterrupt):
             code, stdout, stderr = self.run_cli_streams()
@@ -309,7 +348,6 @@ class CodexSwitchCliTests(unittest.TestCase):
 
         relay_dir = self.profile_root / "relay"
         relay_dir.mkdir()
-        write_json(relay_dir / "auth.json", {"auth_mode": "apikey", "OPENAI_API_KEY": "relay"})
         (relay_dir / "provider.toml").write_text(
             '\n'.join([
                 'model = "gpt-5.4"',
@@ -332,7 +370,10 @@ class CodexSwitchCliTests(unittest.TestCase):
 
         config = self.read_config()
         self.assertIn('model_provider = "openai"', config)
-        self.assertIn('"official"', (self.codex_home / "auth.json").read_text())
+        self.assertEqual(
+            json.loads((self.codex_home / "auth.json").read_text()),
+            {"auth_mode": "chatgpt", "token": "official"},
+        )
         self.assertEqual((self.profile_root / ".active").read_text().strip(), "official")
         rollout = (self.codex_home / "sessions" / "2026" / "05" / "test.jsonl").read_text()
         self.assertIn('"model_provider":"openai"', rollout)
@@ -351,7 +392,6 @@ class CodexSwitchCliTests(unittest.TestCase):
 
         relay_dir = self.profile_root / "relay"
         relay_dir.mkdir()
-        write_json(relay_dir / "auth.json", {"auth_mode": "apikey", "OPENAI_API_KEY": "relay"})
         (relay_dir / "provider.toml").write_text(
             '\n'.join([
                 'model = "gpt-5.5"',
