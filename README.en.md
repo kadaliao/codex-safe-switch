@@ -7,6 +7,32 @@
 
 One command to switch [Codex CLI](https://github.com/openai/codex) provider configs — official OpenAI provider, third-party relays, multiple API keys. CLI + optional Alfred workflow.
 
+## New here? Start with this
+
+**What it solves:** Codex CLI talks to one provider at a time. Hand-editing `~/.codex/config.toml` to switch between a relay and your official account easily corrupts local state — especially **session-history metadata** — so switching back leaves your **history list empty**. This tool stores each provider as a profile, swaps only the provider slice, and realigns history on every switch, so your sessions stay visible no matter how often you flip.
+
+**30-second path:**
+
+```bash
+uv tool install codex-safe-switch   # 1. install (needs uv)
+codex-safe-switch                   # 2. just run it = interactive picker; first run imports your current config
+codex-safe-switch save myrelay      # 3. snapshot the current provider as a profile named `myrelay`
+codex-safe-switch official          # 4. one command back to official OpenAI
+```
+
+**If you found this *because* your history disappeared after a switch:** don't panic — the history files are usually still there, the metadata just no longer matches the active provider.
+
+```bash
+uv tool install codex-safe-switch
+codex-safe-switch doctor-history    # read-only: see which provider/model your history points at
+codex-safe-switch use <profile>     # switch to the provider the history belongs to; this realigns it (use/official both do)
+# Want to repair in place without switching:
+codex-safe-switch merge-history --dry-run   # preview the changes first
+codex-safe-switch merge-history             # write them once it looks right
+```
+
+> None of this touches `~/.codex/auth.json`, so your official ChatGPT login is never overwritten. See "What makes it safe" below for the details.
+
 ## Install
 
 ```bash

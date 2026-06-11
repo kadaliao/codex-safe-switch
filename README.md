@@ -7,6 +7,32 @@
 
 在官方 OpenAI provider、第三方 relay、多组 API key 之间一键切换 [Codex CLI](https://github.com/openai/codex) 的 provider 配置。CLI + 可选 Alfred workflow。
 
+## 第一次用?先看这里
+
+**这个工具解决什么问题:** Codex CLI 同一时间只能连一个 provider。手动改 `~/.codex/config.toml` 切换 relay / 官方账号时,很容易把本地状态(尤其是**历史会话 metadata**)弄乱,导致切回去后**历史会话列表消失**。这个工具把每个 provider 存成一个 profile,切换时只动 provider 字段、并自动对齐历史,所以切来切去历史都还在。
+
+**30 秒上手:**
+
+```bash
+uv tool install codex-safe-switch   # 1. 安装(需要先有 uv)
+codex-safe-switch                   # 2. 直接运行 = 交互选择器,首次会自动导入你现在的配置
+codex-safe-switch save myrelay      # 3. 把当前 provider 存成名为 myrelay 的 profile
+codex-safe-switch official          # 4. 一键切回官方 OpenAI
+```
+
+**如果你是因为「切换后历史会话消失」才找到这里:** 别慌,历史文件通常没丢,只是 metadata 和当前 provider 对不上。
+
+```bash
+uv tool install codex-safe-switch
+codex-safe-switch doctor-history    # 只读检查,看看现在历史指向哪个 provider/model
+codex-safe-switch use <profile>     # 切到历史对应的那个 provider,会自动对齐历史(use/official 都会)
+# 不想切换、只想原地修复 metadata:
+codex-safe-switch merge-history --dry-run   # 先预览改动
+codex-safe-switch merge-history             # 确认无误后写入
+```
+
+> 全程不会动 `~/.codex/auth.json`,所以不会覆盖你的官方 ChatGPT 登录。原理见下面「它怎么保证 safe 切换」一节。
+
 ## 安装
 
 ```bash
